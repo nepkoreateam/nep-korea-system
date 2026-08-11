@@ -1,0 +1,47 @@
+{
+  "name": "NEP Korea 수거관리 v44",
+  "short_name": "NEP Korea",
+  "description": "NEP Korea 음식물류 폐기물 수거관리 시스템",
+  "start_url": "./index.html?v=44",
+  "scope": "./",
+  "id": "./index.html?v=44",
+  "display": "standalone",
+  "display_override": [
+    "standalone",
+    "minimal-ui",
+    "browser"
+  ],
+  "background_color": "#f5f7fb",
+  "theme_color": "#0f3f8c",
+  "orientation": "portrait",
+  "categories": [
+    "business",
+    "productivity"
+  ],
+  "icons": [
+    {
+      "src": "./icons/nep-v29-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/nep-v29-256.png",
+      "sizes": "256x256",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/nep-v29-384.png",
+      "sizes": "384x384",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/nep-v29-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

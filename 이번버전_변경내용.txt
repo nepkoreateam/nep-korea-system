@@ -1,0 +1,32 @@
+v44 최종 깔끔 업로드용 변경내용
+
+1. GitHub Pages 필수 파일만 정리
+- index.html
+- manifest.webmanifest
+- service-worker.js
+- 아이콘 파일
+- README
+- 안내 텍스트
+
+2. 제외한 파일
+- server.js
+- package.json
+- package-lock.json
+- data 폴더
+- public 폴더
+- uploads 폴더
+- .bat 실행파일
+- 개발자용 메모
+
+3. 동선관리 최종 상태
+- 코스 지도 상단 배치
+- 지도 크기 조정
+- 지도 안에 겹치던 현재지점 정보 박스 제거
+- 현재지점/시간/정차시간/지도상태는 지도 아래 별도 박스로 표시
+- 기사별 경고함
+- 코스 재생
+- 현재 지점 네이버지도 열기
+- API 키 없이도 루트 지도 확인 가능
+
+4. 접속 주소
+https://nepkoreateam.github.io/nep-korea-system/?v=44&fresh=1
