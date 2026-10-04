@@ -1,4 +1,4 @@
-<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NEP Korea 수거관리 v44 지도겹침수정</title>
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NEP Korea 수거관리 v45 Supabase로그인_AppState</title>
 <meta name="theme-color" content="#0f3f8c">
 
 <meta name="application-name" content="NEP 수거관리">
@@ -3353,7 +3353,7 @@ button.danger,
     <p>NEP Korea</p>
   </div>
 </div>
-<h2>로그인</h2><p class="muted">관리자에게 받은 계정으로 로그인하세요.</p><input id="loginId" placeholder="아이디" autocomplete="username"><br><br><input id="loginPw" type="password" placeholder="비밀번호" autocomplete="current-password"><br><br><button class="primary finalLoginBtn" onclick="login()">로그인</button><p id="loginMsg" class="muted"></p></section>
+<h2>로그인</h2><p class="muted">Supabase에 만든 관리자 계정으로 로그인하세요. 아이디 칸에 admin 또는 이메일을 입력하세요.</p><input id="loginId" placeholder="이메일 또는 admin" autocomplete="username"><br><br><input id="loginPw" type="password" placeholder="비밀번호" autocomplete="current-password"><br><br><button class="primary finalLoginBtn" onclick="login()">로그인</button><p id="loginMsg" class="muted"></p></section>
 <section id="appView" class="hidden">
 <div class="nepBrandHeader">
   <div class="nepBrandHeaderTop">
@@ -3366,8 +3366,13 @@ button.danger,
     </div>
     </div>
 </div><div class="card row" style="justify-content:space-between"><div><span id="rolePill" class="pill"></span> <b id="userName"></b><div id="userInfo" class="muted"></div></div><button id="logoutBtn" class="ghost" onclick="logout()">로그아웃</button></div><section id="adminView" class="hidden"><div class="tabs card"><button class="active" onclick="tab('dash',this)">오늘 현황</button><button onclick="tab('assign',this)">오늘 배정</button><button onclick="tab('customers',this)">업체 관리</button><button onclick="tab('routeTracking',this)">동선관리</button><button onclick="tab('business',this)">경영 현황</button><button onclick="tab('ledger',this)">월말 관리대장</button><button onclick="tab('send',this)">고객발송</button><button onclick="tab('cms',this)">CMS/미납</button><button onclick="tab('users',this)">계정/보안</button><button onclick="tab('ops',this)">운영관리</button><button onclick="tab('aiMeeting',this)">AI 경영회의</button></div><div id="dash" class="adminTab"></div><div id="assign" class="adminTab hidden"></div><div id="customers" class="adminTab hidden"></div><div id="routeTracking" class="adminTab hidden"></div><div id="business" class="adminTab hidden"></div><div id="ledger" class="adminTab hidden"></div><div id="send" class="adminTab hidden"></div><div id="cms" class="adminTab hidden"></div><div id="users" class="adminTab hidden"></div><div id="ops" class="adminTab hidden"></div><div id="aiMeeting" class="adminTab hidden"></div></section><section id="driverView" class="hidden"></section><section id="customerView" class="hidden"></section></section>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 const today='2026-07-23', month='2026-07';
+// v45: Supabase 실제 로그인 + 전체 앱 상태(AppState) 저장 연결
+const NEP_SUPABASE_URL='https://crwevoclldrrmpcjurwy.supabase.co';
+const NEP_SUPABASE_PUBLISHABLE_KEY='sb_publishable_D0_5l44LvR-0fnfpHAuwjQ__u5v66aY';
+const NEP_APP_STATE_KEY='nep_main';
 // index 테스트판: 샘플 수거현황이 바로 보이도록 날짜 고정
 const money=n=>(Math.round(Number(n)||0)).toLocaleString('ko-KR')+'원', liter=n=>(Number(n)||0).toLocaleString('ko-KR')+'L';
 function seed(){
@@ -3389,7 +3394,10 @@ function resetEmbeddedSample(){
 
 
 let db={users:[],customers:[],assignments:[],pickups:[],expenses:{},fuelLogs:[],factoryWeighLogs:[],driverStates:{}}, me=null;
-const NEP_SERVER_MODE = location.protocol !== 'file:' && !location.hostname.endsWith('github.io') && !location.hostname.includes('githubusercontent.com');
+const NEP_SUPABASE_MODE = !!(window.supabase && NEP_SUPABASE_URL && NEP_SUPABASE_PUBLISHABLE_KEY);
+const nepSupa = NEP_SUPABASE_MODE ? window.supabase.createClient(NEP_SUPABASE_URL, NEP_SUPABASE_PUBLISHABLE_KEY) : null;
+// v45에서는 GitHub Pages에서도 Supabase를 직접 사용합니다. 기존 자체 서버 API 모드는 비활성화합니다.
+const NEP_SERVER_MODE = false;
 let nepSaveTimer=null;
 
 async function api(path, options={}){
@@ -3404,7 +3412,84 @@ async function api(path, options={}){
   return data;
 }
 
+function supabaseFriendlyError(error){
+  const msg=String(error?.message||error||'');
+  if(msg.includes('Invalid login credentials')) return '이메일 또는 비밀번호가 맞지 않습니다.';
+  if(msg.includes('Email not confirmed')) return '이메일 인증이 완료되지 않은 계정입니다. Supabase Users에서 Confirm 처리해주세요.';
+  if(msg.includes('app_states') || msg.includes('relation')) return 'app_states 테이블이 아직 없습니다. 02 SQL을 먼저 실행해주세요.';
+  return msg || '요청에 실패했습니다.';
+}
+
+function profileToMe(profile,user){
+  const role=String(profile.role||'admin');
+  return {
+    id: user?.email || profile.email || profile.id,
+    email: user?.email || profile.email || '',
+    role,
+    name: profile.name || (role==='admin'?'넵코리아 관리자':'사용자'),
+    active: profile.active!==false,
+    profileId: profile.id,
+    authUserId: user?.id || profile.auth_user_id,
+    customerId: profile.linked_customer_id || profile.linkedCustomerId || '',
+    driverId: profile.linked_driver_id || profile.linkedDriverId || ''
+  };
+}
+
+async function supabaseGetProfile(user){
+  const {data,error}=await nepSupa.from('profiles').select('*').eq('auth_user_id',user.id).maybeSingle();
+  if(error) throw error;
+  if(!data) throw new Error('profiles 테이블에 이 로그인 계정의 권한 정보가 없습니다. 관리자 연결 SQL을 먼저 실행해주세요.');
+  if(data.active===false) throw new Error('차단된 계정입니다.');
+  return data;
+}
+
+async function loadSupabaseAppState(){
+  const {data,error}=await nepSupa.from('app_states').select('data, updated_at').eq('state_key',NEP_APP_STATE_KEY).maybeSingle();
+  if(error) throw error;
+  if(data && data.data){
+    db=data.data;
+  }else{
+    db=seed();
+    migrateBaseData();
+    await saveSupabaseAppState(true);
+    return;
+  }
+  migrateBaseData();
+}
+
+async function saveSupabaseAppState(immediate=false){
+  if(!NEP_SUPABASE_MODE || !nepSupa || !me) return;
+  const payload={
+    state_key:NEP_APP_STATE_KEY,
+    data:db,
+    updated_by:me.profileId || null,
+    updated_at:new Date().toISOString()
+  };
+  const {error}=await nepSupa.from('app_states').upsert(payload,{onConflict:'state_key'});
+  if(error) throw error;
+}
+
 async function loadSession(){
+  if(NEP_SUPABASE_MODE){
+    try{
+      const {data:{session}}=await nepSupa.auth.getSession();
+      if(session?.user){
+        const profile=await supabaseGetProfile(session.user);
+        me=profileToMe(profile,session.user);
+        await loadSupabaseAppState();
+        render();
+      }else{
+        // 로그인 전에는 화면 확인용 샘플만 메모리에 준비합니다.
+        db=seed();
+        migrateBaseData();
+      }
+    }catch(e){
+      loginMsg.textContent=supabaseFriendlyError(e);
+      db=seed();
+      migrateBaseData();
+    }
+    return;
+  }
   if(!NEP_SERVER_MODE){
     // GitHub Pages/파일 테스트판에서는 서버 API 없이도 로그인되도록 샘플 데이터를 안전하게 적용합니다.
     db = seed();
@@ -3427,6 +3512,13 @@ async function loadSession(){
 
 function save(){
   localStorage.setItem('nep_v16_account_work_simple', JSON.stringify(db));
+  if(NEP_SUPABASE_MODE && me){
+    clearTimeout(nepSaveTimer);
+    nepSaveTimer=setTimeout(()=>{
+      saveSupabaseAppState().catch(e=>alert('Supabase 저장에 실패했습니다. '+supabaseFriendlyError(e)));
+    },500);
+    return;
+  }
   if(NEP_SERVER_MODE && me){
     clearTimeout(nepSaveTimer);
     nepSaveTimer=setTimeout(()=>{
@@ -3441,6 +3533,11 @@ function save(){
 }
 
 function resetDemo(){
+  if(NEP_SUPABASE_MODE){
+    if(!confirm('Supabase에 저장된 앱 상태를 샘플 데이터로 초기화할까요? 실제 운영 데이터가 있으면 덮어써질 수 있습니다.')) return;
+    db=seed(); migrateBaseData(); saveSupabaseAppState(true).then(()=>{alert('Supabase 앱 상태를 샘플 데이터로 초기화했습니다.'); location.reload();}).catch(e=>alert('초기화 실패: '+supabaseFriendlyError(e)));
+    return;
+  }
   if(!NEP_SERVER_MODE){ resetEmbeddedSample(); return; }
   alert('운영형 앱에서는 초기화 버튼을 사용하지 않습니다. 관리자에게 문의하세요.');
 }
@@ -3450,6 +3547,20 @@ loadSession();
 async function login(){
   let id=loginId.value.trim(), pw=loginPw.value;
   if(!id||!pw){loginMsg.textContent='아이디와 비밀번호를 입력하세요.';return}
+  if(NEP_SUPABASE_MODE){
+    try{
+      loginMsg.textContent='Supabase 로그인 중입니다.';
+      const email=id.includes('@')?id:(id==='admin'?'nepkoreateam@gmail.com':id);
+      const {data,error}=await nepSupa.auth.signInWithPassword({email,password:pw});
+      if(error) throw error;
+      const profile=await supabaseGetProfile(data.user);
+      me=profileToMe(profile,data.user);
+      await loadSupabaseAppState();
+      loginMsg.textContent='';
+      render();
+    }catch(e){loginMsg.textContent=supabaseFriendlyError(e)||'로그인에 실패했습니다.'}
+    return;
+  }
   if(NEP_SERVER_MODE){
     try{
       loginMsg.textContent='로그인 중입니다.';
@@ -3464,10 +3575,11 @@ async function login(){
   me=found; render()
 }
 async function logout(){
+  if(NEP_SUPABASE_MODE){try{await nepSupa.auth.signOut()}catch(e){}}
   if(NEP_SERVER_MODE){try{await api('/api/logout',{method:'POST',body:'{}'})}catch(e){}}
   me=null; appView.classList.add('hidden'); loginView.classList.remove('hidden')
 }
-function render(){loginView.classList.add('hidden');appView.classList.remove('hidden');rolePill.textContent=me.role==='admin'?'관리자':me.role==='driver'?'기사':'고객';userName.textContent=me.name;userInfo.textContent='아이디: '+me.id;adminView.classList.toggle('hidden',me.role!=='admin');driverView.classList.toggle('hidden',me.role!=='driver');customerView.classList.toggle('hidden',me.role!=='customer'); if(me.role==='admin') renderAdmin(); if(me.role==='driver') renderDriver(); if(me.role==='customer') renderCustomer()}
+function render(){loginView.classList.add('hidden');appView.classList.remove('hidden');rolePill.textContent=me.role==='admin'?'관리자':me.role==='driver'?'기사':'고객';userName.textContent=me.name;userInfo.textContent=(NEP_SUPABASE_MODE?'Supabase 연결 · ':'아이디: ')+me.id;adminView.classList.toggle('hidden',me.role!=='admin');driverView.classList.toggle('hidden',me.role!=='driver');customerView.classList.toggle('hidden',me.role!=='customer'); if(me.role==='admin') renderAdmin(); if(me.role==='driver') renderDriver(); if(me.role==='customer') renderCustomer()}
 function tab(id,btn){document.querySelectorAll('.adminTab').forEach(x=>x.classList.add('hidden'));document.getElementById(id).classList.remove('hidden');document.querySelectorAll('.tabs button').forEach(x=>x.classList.remove('active'));if(btn)btn.classList.add('active')}
 function tabBtnById(id){return [...document.querySelectorAll('.tabs button')].find(b=>String(b.getAttribute('onclick')||'').includes("'"+id+"'"))||document.querySelector('.tabs button')}
 function goAdminTab(id){tab(id,tabBtnById(id))}

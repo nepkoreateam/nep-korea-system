@@ -1,10 +1,10 @@
 
-const CACHE_NAME = 'nep-korea-v44-final-clean';
+const CACHE_NAME = 'nep-korea-v45-supabase-appstate';
 self.addEventListener('install', event => {
   self.skipWaiting();
   event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll([
     './',
-    './index.html?v=44',
+    './index.html?v=45',
     './manifest.webmanifest',
     './apple-touch-icon-v29.png',
     './favicon-v29.png',
