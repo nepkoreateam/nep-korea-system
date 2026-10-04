@@ -1,4 +1,4 @@
-<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NEP Korea 수거관리 v45 Supabase로그인_AppState</title>
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NEP Korea 수거관리 v46 업체관리_CustomersDB</title>
 <meta name="theme-color" content="#0f3f8c">
 
 <meta name="application-name" content="NEP 수거관리">
@@ -3369,7 +3369,7 @@ button.danger,
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 const today='2026-07-23', month='2026-07';
-// v45: Supabase 실제 로그인 + 전체 앱 상태(AppState) 저장 연결
+// v46: Supabase 실제 로그인 + AppState + 업체관리 customers 테이블 직접연결
 const NEP_SUPABASE_URL='https://crwevoclldrrmpcjurwy.supabase.co';
 const NEP_SUPABASE_PUBLISHABLE_KEY='sb_publishable_D0_5l44LvR-0fnfpHAuwjQ__u5v66aY';
 const NEP_APP_STATE_KEY='nep_main';
@@ -3416,6 +3416,7 @@ function supabaseFriendlyError(error){
   const msg=String(error?.message||error||'');
   if(msg.includes('Invalid login credentials')) return '이메일 또는 비밀번호가 맞지 않습니다.';
   if(msg.includes('Email not confirmed')) return '이메일 인증이 완료되지 않은 계정입니다. Supabase Users에서 Confirm 처리해주세요.';
+  if(msg.includes('app_customer_id') || msg.includes('route_plans') || msg.includes('pickup_days_ko')) return 'v46 업체관리 DB 컬럼이 아직 없습니다. 03 SQL을 먼저 실행해주세요.';
   if(msg.includes('app_states') || msg.includes('relation')) return 'app_states 테이블이 아직 없습니다. 02 SQL을 먼저 실행해주세요.';
   return msg || '요청에 실패했습니다.';
 }
@@ -3469,6 +3470,113 @@ async function saveSupabaseAppState(immediate=false){
   if(error) throw error;
 }
 
+
+// v46: 업체관리 화면은 public.customers 테이블에도 직접 저장합니다.
+const NEP_CUSTOMERS_DIRECT_MODE = true;
+const DAY_KO_TO_DB = {월:'mon',화:'tue',수:'wed',목:'thu',금:'fri',토:'sat',일:'sun'};
+const DAY_DB_TO_KO = {mon:'월',tue:'화',wed:'수',thu:'목',fri:'금',sat:'토',sun:'일'};
+function daysKoToDbArray(days){
+  return String(days||'').split('').filter(d=>DAY_KO_TO_DB[d]).map(d=>DAY_KO_TO_DB[d]);
+}
+function daysDbArrayToKo(arr){
+  if(!Array.isArray(arr)) return '';
+  return arr.map(x=>DAY_DB_TO_KO[x]||x).filter(x=>['월','화','수','목','금','토','일'].includes(x)).join('');
+}
+function binSizeNumber(binType){
+  const n=parseInt(String(binType||'').replace(/[^0-9]/g,''),10);
+  return Number.isFinite(n)&&n>0?n:120;
+}
+function appCustomerToSupabaseRow(cu){
+  const appMeta={
+    defaultDriverId: cu.defaultDriverId||'',
+    joinDate: cu.joinDate||'',
+    routeOrder: Number(cu.routeOrder||999),
+    source:'nep_v46'
+  };
+  return {
+    app_customer_id: String(cu.id),
+    customer_code: String(cu.id),
+    name: cu.name||'',
+    owner_name: cu.owner||null,
+    address: cu.addr||null,
+    main_phone: cu.phone||null,
+    email: cu.email||null,
+    pickup_days: daysKoToDbArray(cu.days),
+    pickup_days_ko: cu.days||'',
+    default_driver_id: null,
+    status: cu.active===false?'paused':'active',
+    base_fee: Number(cu.baseFee||0),
+    base_liters: Number(cu.includedLiter||0),
+    price_per_liter: Number(cu.unitPrice||130),
+    deposit: Number(cu.deposit||0),
+    bin_size_l: binSizeNumber(cu.binType),
+    bin_type: cu.binType||((binSizeNumber(cu.binType)||120)+'L'),
+    bin_count: Number(cu.binCount||1),
+    admin_memo: cu.memo||null,
+    route_order: Number(cu.routeOrder||999),
+    route_plans: cu.routePlans||{},
+    app_meta: appMeta
+  };
+}
+function supabaseRowToAppCustomer(row){
+  const meta=row.app_meta||{};
+  const plans=row.route_plans||{};
+  const first=(typeof firstPlanInfo==='function')?firstPlanInfo(plans):null;
+  const days=row.pickup_days_ko || daysDbArrayToKo(row.pickup_days) || plansToDays(plans) || '';
+  const order=Number(row.route_order||meta.routeOrder||first?.order||999);
+  return {
+    id: row.app_customer_id || row.customer_code || row.id,
+    name: row.name||'',
+    owner: row.owner_name||'',
+    phone: row.main_phone||'',
+    email: row.email||'',
+    addr: [row.address,row.detail_address].filter(Boolean).join(' '),
+    days,
+    defaultDriverId: meta.defaultDriverId || first?.driverId || '',
+    routeOrder: order,
+    routePlans: plans,
+    binType: row.bin_type || ((Number(row.bin_size_l||120))+'L'),
+    binCount: Number(row.bin_count||1),
+    deposit: Number(row.deposit||0),
+    includedLiter: Number(row.base_liters||0),
+    baseFee: Number(row.base_fee||0),
+    unitPrice: Number(row.price_per_liter||130),
+    memo: row.admin_memo||'',
+    active: !['paused','terminated'].includes(String(row.status||'active')),
+    joinDate: meta.joinDate||''
+  };
+}
+async function loadSupabaseCustomersDirect(){
+  if(!NEP_SUPABASE_MODE || !nepSupa || !me || me.role!=='admin' || !NEP_CUSTOMERS_DIRECT_MODE) return;
+  const {data,error}=await nepSupa.from('customers')
+    .select('id,app_customer_id,customer_code,name,owner_name,address,detail_address,main_phone,email,pickup_days,pickup_days_ko,status,base_fee,base_liters,price_per_liter,deposit,bin_size_l,bin_type,bin_count,admin_memo,route_order,route_plans,app_meta')
+    .not('app_customer_id','is',null)
+    .order('route_order',{ascending:true})
+    .order('name',{ascending:true});
+  if(error) throw new Error('v46 업체관리 DB 연결 오류: '+supabaseFriendlyError(error));
+  if(Array.isArray(data) && data.length){
+    db.customers=data.map(supabaseRowToAppCustomer);
+    migrateBaseData();
+  }
+}
+async function syncOneCustomerToSupabase(cu){
+  if(!NEP_SUPABASE_MODE || !nepSupa || !me || me.role!=='admin' || !NEP_CUSTOMERS_DIRECT_MODE || !cu?.id) return;
+  const row=appCustomerToSupabaseRow(cu);
+  const {error}=await nepSupa.from('customers').upsert(row,{onConflict:'app_customer_id'});
+  if(error) throw new Error('업체 DB 저장 실패: '+supabaseFriendlyError(error));
+}
+async function syncAllCustomersToSupabase(){
+  if(!NEP_SUPABASE_MODE || !nepSupa || !me || me.role!=='admin') return alert('관리자 로그인 후 사용할 수 있습니다.');
+  if(!confirm(`현재 화면의 업체 ${db.customers.length}곳을 Supabase customers 테이블에 동기화할까요?`)) return;
+  const rows=(db.customers||[]).map(appCustomerToSupabaseRow);
+  const {error}=await nepSupa.from('customers').upsert(rows,{onConflict:'app_customer_id'});
+  if(error) return alert('업체 DB 동기화 실패: '+supabaseFriendlyError(error));
+  await loadSupabaseCustomersDirect();
+  await saveSupabaseAppState(true);
+  renderAdmin(); goAdminTab('customers');
+  alert(`업체 ${rows.length}곳을 Supabase customers 테이블에 저장했습니다.`);
+}
+
 async function loadSession(){
   if(NEP_SUPABASE_MODE){
     try{
@@ -3477,6 +3585,7 @@ async function loadSession(){
         const profile=await supabaseGetProfile(session.user);
         me=profileToMe(profile,session.user);
         await loadSupabaseAppState();
+        await loadSupabaseCustomersDirect();
         render();
       }else{
         // 로그인 전에는 화면 확인용 샘플만 메모리에 준비합니다.
@@ -3985,7 +4094,7 @@ function renderCustomers(){
    </div>
  </div>
  <div class="card">
-   <div class="sectionTitle"><div><h3>업체 목록</h3><p class="muted">순번 기준으로 정리됩니다. 업체명·주소·기사·순번으로 검색할 수 있습니다.</p></div><div class="customerSearchActions"><input class="customerSearch" id="customerSearch" placeholder="순번, 업체명, 주소, 배정기사 검색" oninput="drawCustomerList()"><button class="smallbtn green" onclick="autoRefreshTodayAssignments(false); renderAdmin(); goAdminTab('assign')">오늘배정 자동갱신</button></div></div>
+   <div class="sectionTitle"><div><h3>업체 목록</h3><p class="muted">순번 기준으로 정리됩니다. 업체명·주소·기사·순번으로 검색할 수 있습니다.</p></div><div class="customerSearchActions"><input class="customerSearch" id="customerSearch" placeholder="순번, 업체명, 주소, 배정기사 검색" oninput="drawCustomerList()"><button class="smallbtn green" onclick="autoRefreshTodayAssignments(false); renderAdmin(); goAdminTab('assign')">오늘배정 자동갱신</button><button class="smallbtn primary" onclick="syncAllCustomersToSupabase()">업체DB 동기화</button></div></div>
    <div id="customerList" class="customerList"></div>
  </div>`;
  setTimeout(drawCustomerList,0);
@@ -4071,7 +4180,7 @@ function addCustomer(){
  normalizeAllRouteOrders();
  autoRefreshTodayAssignments(true);
  if(typeof addChangeLog==='function') addChangeLog({type:'customer_create',detail:`업체 추가 및 순번 자동조정: ${item.name}`});
- save();renderAdmin();goAdminTab('customers')
+ save(); syncOneCustomerToSupabase(item).catch(e=>alert(e.message||e)); renderAdmin();goAdminTab('customers')
 }
 
 
@@ -4090,7 +4199,7 @@ function toggleCustomer(i){
  db.customers[i].active=!db.customers[i].active;
  autoRefreshTodayAssignments(true);
  if(typeof addChangeLog==='function') addChangeLog({type:'customer_status',customerId:db.customers[i].id,customerName:db.customers[i].name,detail:`업체 ${db.customers[i].active?'사용':'중지'} 처리 및 오늘배정 자동갱신`});
- save();renderAdmin();goAdminTab('customers')
+ save(); syncOneCustomerToSupabase(db.customers[i]).catch(e=>alert(e.message||e)); renderAdmin();goAdminTab('customers')
 }
 function ensureGlobalModal(){
  let bg=document.getElementById('accountModalBg');
@@ -4158,7 +4267,7 @@ function saveCustomerEdit(i){
  normalizeAllRouteOrders();
  autoRefreshTodayAssignments(true);
  if(typeof addChangeLog==='function') addChangeLog({type:'customer_update',customerId:x.id,customerName:x.name,detail:`업체 정보 수정 및 순번 자동조정: ${before} → ${x.name}`});
- save(); closeAccountModal(); renderAdmin(); goAdminTab('customers');
+ save(); syncOneCustomerToSupabase(x).catch(e=>alert(e.message||e)); closeAccountModal(); renderAdmin(); goAdminTab('customers');
 }
 
 function getRegion(addr){
