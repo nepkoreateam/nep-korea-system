@@ -1,4 +1,4 @@
-<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NEP Korea 수거관리 v47 오늘배정_RoutesDB</title>
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NEP Korea 수거관리 v48.1 기사앱_PickupsDB</title>
 <meta name="theme-color" content="#0f3f8c">
 
 <meta name="application-name" content="NEP 수거관리">
@@ -3353,7 +3353,7 @@ button.danger,
     <p>NEP Korea</p>
   </div>
 </div>
-<h2>로그인</h2><p class="muted">Supabase에 만든 관리자 계정으로 로그인하세요. 아이디 칸에 admin 또는 이메일을 입력하세요.</p><input id="loginId" placeholder="이메일 또는 admin" autocomplete="username"><br><br><input id="loginPw" type="password" placeholder="비밀번호" autocomplete="current-password"><br><br><button class="primary finalLoginBtn" onclick="login()">로그인</button><p id="loginMsg" class="muted"></p></section>
+<h2>로그인</h2><p class="muted">Supabase 계정으로 로그인하세요. 관리자: admin, 기사: driver1 / driver2</p><input id="loginId" placeholder="이메일 또는 admin" autocomplete="username"><br><br><input id="loginPw" type="password" placeholder="비밀번호" autocomplete="current-password"><br><br><button class="primary finalLoginBtn" onclick="login()">로그인</button><p id="loginMsg" class="muted"></p></section>
 <section id="appView" class="hidden">
 <div class="nepBrandHeader">
   <div class="nepBrandHeaderTop">
@@ -3369,7 +3369,7 @@ button.danger,
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 const today='2026-07-23', month='2026-07';
-// v47: Supabase 실제 로그인 + AppState + 업체관리 customers 직접연결 + 오늘배정 routes/route_stops 직접연결
+// v48.1: Supabase 실제 로그인 + 기사 로그인 버튼 수정 + AppState + 업체관리 customers + 오늘배정 routes/route_stops + 기사앱 pickup_records 직접연결
 const NEP_SUPABASE_URL='https://crwevoclldrrmpcjurwy.supabase.co';
 const NEP_SUPABASE_PUBLISHABLE_KEY='sb_publishable_D0_5l44LvR-0fnfpHAuwjQ__u5v66aY';
 const NEP_APP_STATE_KEY='nep_main';
@@ -3416,6 +3416,7 @@ function supabaseFriendlyError(error){
   const msg=String(error?.message||error||'');
   if(msg.includes('Invalid login credentials')) return '이메일 또는 비밀번호가 맞지 않습니다.';
   if(msg.includes('Email not confirmed')) return '이메일 인증이 완료되지 않은 계정입니다. Supabase Users에서 Confirm 처리해주세요.';
+  if(msg.includes('app_pickup_key') || msg.includes('pickup_records')) return 'v48 기사앱 수거완료 DB 컬럼이 아직 없습니다. 05 SQL을 먼저 실행해주세요.';
   if(msg.includes('app_route_key') || msg.includes('app_driver_id') || msg.includes('route_stops')) return 'v47 오늘배정 DB 컬럼이 아직 없습니다. 04 SQL을 먼저 실행해주세요.';
   if(msg.includes('app_customer_id') || msg.includes('route_plans') || msg.includes('pickup_days_ko')) return 'v46 업체관리 DB 컬럼이 아직 없습니다. 03 SQL을 먼저 실행해주세요.';
   if(msg.includes('app_states') || msg.includes('relation')) return 'app_states 테이블이 아직 없습니다. 02 SQL을 먼저 실행해주세요.';
@@ -3424,9 +3425,14 @@ function supabaseFriendlyError(error){
 
 function profileToMe(profile,user){
   const role=String(profile.role||'admin');
+  const email=user?.email || profile.email || '';
+  const prefix=String(email||'').split('@')[0];
+  const appId = role==='driver' ? (profile.app_driver_id || profile.appDriverId || prefix)
+    : role==='customer' ? (profile.app_customer_id || profile.appCustomerId || prefix)
+    : ((prefix==='nepkoreateam'||prefix==='nepkorateam') ? 'admin' : (email || profile.id));
   return {
-    id: user?.email || profile.email || profile.id,
-    email: user?.email || profile.email || '',
+    id: appId,
+    email,
     role,
     name: profile.name || (role==='admin'?'넵코리아 관리자':'사용자'),
     active: profile.active!==false,
@@ -3731,6 +3737,78 @@ async function loadRoutesForDateFromSupabase(d=routeDateVal()){
 }
 
 
+
+
+// v48: 기사앱 수거완료/미수거 기록을 public.pickup_records 테이블에도 직접 저장합니다.
+const NEP_PICKUPS_DIRECT_MODE = true;
+function pickupStatusToDb(st){
+  return st==='done' ? 'completed' : (st==='missed' ? 'missed' : 'pending');
+}
+function pickupCompletedAt(rec){
+  const d=rec?.date || today;
+  const t=String(rec?.time || '').match(/^(\d{1,2}):(\d{2})$/);
+  if(t) return `${d}T${String(t[1]).padStart(2,'0')}:${t[2]}:00`;
+  return new Date().toISOString();
+}
+async function findSupabaseRouteStopForPickup(rec){
+  const routeKey=`${rec.date||today}__${rec.driverId}`;
+  let routeId=null, routeStopId=null;
+  const {data:route,error:routeErr}=await nepSupa.from('routes').select('id').eq('app_route_key',routeKey).maybeSingle();
+  if(routeErr) throw new Error('수거기록용 코스 조회 실패: '+supabaseFriendlyError(routeErr));
+  if(route?.id){
+    routeId=route.id;
+    const {data:stop,error:stopErr}=await nepSupa.from('route_stops').select('id').eq('route_id',route.id).eq('app_customer_id',String(rec.customerId)).maybeSingle();
+    if(stopErr) throw new Error('수거기록용 코스 순서 조회 실패: '+supabaseFriendlyError(stopErr));
+    routeStopId=stop?.id || null;
+  }
+  return {routeId,routeStopId,routeKey};
+}
+async function syncPickupRecordToSupabase(rec){
+  if(!NEP_SUPABASE_MODE || !nepSupa || !me || !NEP_PICKUPS_DIRECT_MODE || !rec?.customerId) return;
+  const driverMap=await getSupabaseDriverUuidMap();
+  const customerMap=await getSupabaseCustomerUuidMap();
+  const driverUuid=driverMap[rec.driverId] || driverMap[me.id];
+  const customerUuid=customerMap[rec.customerId];
+  if(!driverUuid) throw new Error(`${rec.driverId} 기사 DB 연결이 없습니다. drivers.app_driver_id를 확인해주세요.`);
+  if(!customerUuid) throw new Error(`${rec.customerId} 업체 DB 연결이 없습니다. 업체DB 동기화를 먼저 해주세요.`);
+  const linked=await findSupabaseRouteStopForPickup(rec);
+  const cu=c(rec.customerId);
+  const payload={
+    app_pickup_key:`${rec.date||today}__${rec.driverId}__${rec.customerId}`,
+    app_driver_id:String(rec.driverId),
+    app_customer_id:String(rec.customerId),
+    app_route_key:linked.routeKey,
+    pickup_date:rec.date||today,
+    route_id:linked.routeId,
+    route_stop_id:linked.routeStopId,
+    customer_id:customerUuid,
+    driver_id:driverUuid,
+    status:pickupStatusToDb(rec.status),
+    liters:Number(rec.liter||0),
+    bin_count:Number(cu?.binCount||0),
+    completed_at:pickupCompletedAt(rec),
+    missed_reason:rec.status==='missed' ? (rec.memo||'미수거') : null,
+    driver_memo:rec.memo||null,
+    app_meta:{source:'nep_v48', app_status:rec.status||'', app_time:rec.time||''}
+  };
+  const {error}=await nepSupa.from('pickup_records').upsert(payload,{onConflict:'app_pickup_key'});
+  if(error) throw new Error('수거기록 DB 저장 실패: '+supabaseFriendlyError(error));
+  if(linked.routeStopId){
+    const {error:stopErr}=await nepSupa.from('route_stops').update({status:pickupStatusToDb(rec.status),driver_memo:rec.memo||null}).eq('id',linked.routeStopId);
+    if(stopErr) throw new Error('코스 순서 상태 업데이트 실패: '+supabaseFriendlyError(stopErr));
+  }
+}
+async function syncTodayPickupsToSupabase(){
+  if(!NEP_SUPABASE_MODE || !nepSupa || !me || me.role!=='admin') return alert('관리자 로그인 후 사용할 수 있습니다.');
+  const d=routeDateVal ? routeDateVal() : today;
+  const rows=(db.pickups||[]).filter(x=>x.date===d);
+  if(!rows.length) return alert(`${d} 날짜에 아직 수거완료/미수거 기록이 없습니다.`);
+  let ok=0;
+  for(const rec of rows){ await syncPickupRecordToSupabase(rec); ok++; }
+  await saveSupabaseAppState(true);
+  alert(`수거기록DB 동기화 완료: ${d} 기준 ${ok}건 저장`);
+}
+
 async function loadSession(){
   if(NEP_SUPABASE_MODE){
     try{
@@ -3813,7 +3891,8 @@ async function login(){
   if(NEP_SUPABASE_MODE){
     try{
       loginMsg.textContent='Supabase 로그인 중입니다.';
-      const email=id.includes('@')?id:(id==='admin'?'nepkoreateam@gmail.com':id);
+      const loginMap={admin:'nepkoreateam@gmail.com',driver1:'driver1@nepkorea.local',driver2:'driver2@nepkorea.local',cust1:'cust1@nepkorea.local',cust2:'cust2@nepkorea.local'};
+      const email=id.includes('@')?id:(loginMap[id.toLowerCase()]||id);
       const {data,error}=await nepSupa.auth.signInWithPassword({email,password:pw});
       if(error) throw error;
       const profile=await supabaseGetProfile(data.user);
@@ -4198,7 +4277,7 @@ function autoRefreshTodayAssignments(quiet=true){
 }
 function syncRoutePlansForDriver(did,d){let dk=dayKo(d); db.assignments.filter(a=>a.date===d&&a.driverId===did).forEach(a=>{let cu=c(a.customerId); if(cu.id){cu.routePlans=cu.routePlans||{}; cu.routePlans[dk]={driverId:did,order:a.order}}})}
 function clearRoutePlanIfMatch(cid,did,d){let cu=c(cid), dk=dayKo(d); if(cu.routePlans&&cu.routePlans[dk]&&cu.routePlans[dk].driverId===did) delete cu.routePlans[dk]}
-function renderAssign(){let drivers=activeDrivers(); assign.innerHTML=`<div class="card"><h3>정기 코스 배정</h3><p class="muted">업체관리의 수거요일·담당기사·방문순번을 기준으로 오늘배정이 자동 생성됩니다. 이 화면에서는 오늘만 예외로 순서 변경, 업체 추가·삭제가 가능합니다.</p><div class="grid"><input id="routeDate" type="date" value="${today}" onchange="ensureRouteThenDraw()"><select id="routeDriver" onchange="ensureRouteThenDraw()">${drivers.map(d=>`<option value="${d.id}">${d.name}</option>`).join('')}</select><input id="routeSearch" placeholder="추가할 업체 검색" oninput="drawRouteSearch()"><select id="routeCustomer"></select><input id="assignOrder" type="number" min="1" placeholder="넣을 순서 번호 예: 3"><button class="primary" onclick="addRouteEasy()">선택 업체 넣기</button><button class="green" onclick="rebuildAssignmentsForDateFromRules(routeDateVal(),false); save(); drawRouteSearch(); drawRouteBoard(); renderDash()">업체관리 기준 자동생성</button><button class="smallbtn primary" onclick="syncCurrentRouteToSupabase()">코스DB 동기화</button><button class="smallbtn" onclick="loadRoutesForDateFromSupabase()">코스DB 불러오기</button></div><div id="routeHint" class="muted" style="margin-top:10px">v47: 오늘배정 저장 후 코스DB 동기화를 누르면 routes / route_stops 테이블에 저장됩니다.</div></div><div id="routeBoard"></div>`; ensureRouteThenDraw()} 
+function renderAssign(){let drivers=activeDrivers(); assign.innerHTML=`<div class="card"><h3>정기 코스 배정</h3><p class="muted">업체관리의 수거요일·담당기사·방문순번을 기준으로 오늘배정이 자동 생성됩니다. 이 화면에서는 오늘만 예외로 순서 변경, 업체 추가·삭제가 가능합니다.</p><div class="grid"><input id="routeDate" type="date" value="${today}" onchange="ensureRouteThenDraw()"><select id="routeDriver" onchange="ensureRouteThenDraw()">${drivers.map(d=>`<option value="${d.id}">${d.name}</option>`).join('')}</select><input id="routeSearch" placeholder="추가할 업체 검색" oninput="drawRouteSearch()"><select id="routeCustomer"></select><input id="assignOrder" type="number" min="1" placeholder="넣을 순서 번호 예: 3"><button class="primary" onclick="addRouteEasy()">선택 업체 넣기</button><button class="green" onclick="rebuildAssignmentsForDateFromRules(routeDateVal(),false); save(); drawRouteSearch(); drawRouteBoard(); renderDash()">업체관리 기준 자동생성</button><button class="smallbtn primary" onclick="syncCurrentRouteToSupabase()">코스DB 동기화</button><button class="smallbtn" onclick="loadRoutesForDateFromSupabase()">코스DB 불러오기</button><button class="smallbtn" onclick="syncTodayPickupsToSupabase()">수거기록DB 동기화</button></div><div id="routeHint" class="muted" style="margin-top:10px">v48: 오늘배정은 routes / route_stops에, 기사앱 수거완료는 pickup_records에 저장됩니다.</div></div><div id="routeBoard"></div>`; ensureRouteThenDraw()} 
 function updateAutoPreview(){let d=document.getElementById('autoDate')?.value||today, html=`${d} (${dayKo(d)}) 자동 배정 예상: `; let parts=activeDrivers().map(dr=>`${dr.name} ${activeCustomersForDay(dr.id,d).length}곳`); let el=document.getElementById('autoPreview'); if(el) el.innerHTML=html+parts.join(' · ')}
 function ensureRouteThenDraw(){let did=document.getElementById('routeDriver')?.value, d=routeDateVal(); if(did&&d&&!db.assignments.some(a=>a.date===d&&a.driverId===did)){buildRouteForDriver(did,d,false);save()} drawRouteSearch(); drawRouteBoard()}
 function rebuildRouteFromWeekday(){let did=routeDriver.value,d=routeDateVal(); if(!confirm(`${d} ${dayKo(d)}요일 기준으로 ${u(did).name} 코스를 다시 정리할까요? 기존 순서 변경은 초기화됩니다.`))return; buildRouteForDriver(did,d,false);save();drawRouteSearch();drawRouteBoard();renderDash()}
@@ -5549,6 +5628,10 @@ function savePickup(cid, st){
   }
 
   if(idx>=0) db.pickups[idx]=rec; else db.pickups.push(rec);
+
+  if(NEP_SUPABASE_MODE && NEP_PICKUPS_DIRECT_MODE){
+    syncPickupRecordToSupabase(rec).catch(e=>alert('수거기록 DB 저장 실패: '+supabaseFriendlyError(e)));
+  }
 
   const s = getDriverState();
   const rows = driverRowsToday();
@@ -7865,6 +7948,89 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     navigator.serviceWorker.register('./service-worker.js').catch(() => {});
   });
 }
+</script>
+
+
+<script>
+// v48.1 로그인 버튼 안전 패치: inline onclick이 막혀도 직접 버튼에 이벤트를 연결합니다.
+(function(){
+  function el(id){ return document.getElementById(id); }
+  function setMsg(txt){ var m=el('loginMsg'); if(m) m.textContent=txt||''; }
+  function friendly(e){
+    try{ if(typeof supabaseFriendlyError==='function') return supabaseFriendlyError(e); }catch(_err){}
+    var msg=String((e&&e.message)||e||'');
+    if(msg.indexOf('Invalid login credentials')>=0) return '이메일 또는 비밀번호가 맞지 않습니다.';
+    if(msg.indexOf('Email not confirmed')>=0) return '이메일 인증이 완료되지 않은 계정입니다.';
+    return msg || '로그인에 실패했습니다.';
+  }
+  async function safeLogin(ev){
+    if(ev && ev.preventDefault) ev.preventDefault();
+    var idEl=el('loginId'), pwEl=el('loginPw');
+    var id=(idEl&&idEl.value?String(idEl.value):'').trim();
+    var pw=(pwEl&&pwEl.value?String(pwEl.value):'');
+    if(!id || !pw){ setMsg('아이디와 비밀번호를 입력하세요.'); return false; }
+    var loginMap={
+      admin:'nepkoreateam@gmail.com',
+      driver1:'driver1@nepkorea.local',
+      driver2:'driver2@nepkorea.local',
+      cust1:'cust1@nepkorea.local',
+      cust2:'cust2@nepkorea.local'
+    };
+    var email=id.indexOf('@')>=0 ? id : (loginMap[id.toLowerCase()] || id);
+    try{
+      setMsg('로그인 버튼 작동 확인 · Supabase 로그인 중입니다.');
+      if(typeof NEP_SUPABASE_MODE!=='undefined' && NEP_SUPABASE_MODE){
+        if(typeof nepSupa==='undefined' || !nepSupa) throw new Error('Supabase 연결 객체가 없습니다. 새로고침 후 다시 시도해주세요.');
+        var res=await nepSupa.auth.signInWithPassword({email:email,password:pw});
+        if(res.error) throw res.error;
+        if(!res.data || !res.data.user) throw new Error('로그인 사용자 정보를 받지 못했습니다.');
+        var profile=await supabaseGetProfile(res.data.user);
+        window.me=profileToMe(profile,res.data.user);
+        // 기존 코드의 전역 me/db는 window 속성이 아닐 수 있어 직접 대입도 시도합니다.
+        try{ me=window.me; }catch(_e){}
+        await loadSupabaseAppState();
+        try{ if(typeof loadSupabaseCustomersDirect==='function') await loadSupabaseCustomersDirect(); }catch(_e){}
+        setMsg('');
+        render();
+        return false;
+      }
+      if(typeof db!=='undefined' && db && db.users){
+        var found=db.users.find(function(x){return x.id===id && x.pw===pw;});
+        if(!found){ setMsg('아이디가 없거나 비밀번호가 맞지 않습니다.'); return false; }
+        if(found.active===false){ setMsg('퇴사/차단된 계정입니다. 로그인할 수 없습니다.'); return false; }
+        try{ me=found; }catch(_e){ window.me=found; }
+        render();
+        return false;
+      }
+      throw new Error('로그인 환경을 찾지 못했습니다. 페이지를 강력 새로고침해주세요.');
+    }catch(e){
+      setMsg(friendly(e));
+      return false;
+    }
+  }
+  window.login=safeLogin;
+  function bind(){
+    var btn=document.querySelector('.finalLoginBtn') || document.querySelector('#loginView button.primary');
+    if(btn){
+      btn.onclick=null;
+      if(!btn.dataset.nepLoginBound){
+        btn.dataset.nepLoginBound='1';
+        btn.addEventListener('click', safeLogin);
+      }
+    }
+    ['loginId','loginPw'].forEach(function(id){
+      var node=el(id);
+      if(node && !node.dataset.nepEnterBound){
+        node.dataset.nepEnterBound='1';
+        node.addEventListener('keydown', function(ev){
+          if(ev.key==='Enter') safeLogin(ev);
+        });
+      }
+    });
+    setMsg('');
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', bind); else bind();
+})();
 </script>
 
 </body></html>

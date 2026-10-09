@@ -1,24 +1,20 @@
-
-const CACHE_NAME = 'nep-korea-v45-supabase-appstate';
-self.addEventListener('install', event => {
-  self.skipWaiting();
-  event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll([
-    './',
-    './index.html?v=45',
-    './manifest.webmanifest',
-    './apple-touch-icon-v29.png',
-    './favicon-v29.png',
-    './icons/nep-v29-180.png',
-    './icons/nep-v29-192.png',
-    './icons/nep-v29-512.png'
-  ]).catch(()=>{})));
-});
+const CACHE_NAME = 'nep-korea-v48-1-login-fix';
+self.addEventListener('install', event => { self.skipWaiting(); });
 self.addEventListener('activate', event => {
-  event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k)))));
-  self.clients.claim();
+  event.waitUntil((async()=>{
+    const keys = await caches.keys();
+    await Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k)));
+    await self.clients.claim();
+  })());
 });
 self.addEventListener('fetch', event => {
-  const url = new URL(event.request.url);
-  if (url.pathname.includes('/api/')) return;
-  event.respondWith(fetch(event.request).catch(() => caches.match(event.request).then(res => res || caches.match('./index.html'))));
+  if (event.request.method !== 'GET') return;
+  event.respondWith((async()=>{
+    try { return await fetch(event.request); }
+    catch (e) {
+      const cached = await caches.match(event.request);
+      if (cached) return cached;
+      throw e;
+    }
+  })());
 });
