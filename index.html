@@ -1,4 +1,4 @@
-<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NEP Korea 수거관리 v48.1 기사앱_PickupsDB</title>
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NEP Korea 수거관리 v48.2 로그인완전수정</title>
 <meta name="theme-color" content="#0f3f8c">
 
 <meta name="application-name" content="NEP 수거관리">
@@ -3353,7 +3353,7 @@ button.danger,
     <p>NEP Korea</p>
   </div>
 </div>
-<h2>로그인</h2><p class="muted">Supabase 계정으로 로그인하세요. 관리자: admin, 기사: driver1 / driver2</p><input id="loginId" placeholder="이메일 또는 admin" autocomplete="username"><br><br><input id="loginPw" type="password" placeholder="비밀번호" autocomplete="current-password"><br><br><button class="primary finalLoginBtn" onclick="login()">로그인</button><p id="loginMsg" class="muted"></p></section>
+<h2>로그인</h2><div style="margin:8px 0 12px;padding:10px;border:1px solid #c7dbff;background:#eef4ff;border-radius:10px;font-size:13px;color:#0848a4;font-weight:700">v48.2 로그인 수리본 · 빈칸으로 로그인 누르면 안내문구가 떠야 정상입니다.</div><p class="muted">Supabase 계정으로 로그인하세요. 관리자: admin, 기사: driver1 / driver2</p><input id="loginId" placeholder="이메일 또는 admin" autocomplete="username"><br><br><input id="loginPw" type="password" placeholder="비밀번호" autocomplete="current-password"><br><br><button type="button" id="nepLoginButton" class="primary finalLoginBtn" onclick="return window.NEP_HARD_LOGIN ? window.NEP_HARD_LOGIN(event) : (document.getElementById('loginMsg').textContent='페이지 준비 중입니다. 2초 후 다시 눌러주세요.', false)">로그인</button><p id="loginMsg" class="muted"></p></section>
 <section id="appView" class="hidden">
 <div class="nepBrandHeader">
   <div class="nepBrandHeaderTop">
@@ -3369,7 +3369,7 @@ button.danger,
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 const today='2026-07-23', month='2026-07';
-// v48.1: Supabase 실제 로그인 + 기사 로그인 버튼 수정 + AppState + 업체관리 customers + 오늘배정 routes/route_stops + 기사앱 pickup_records 직접연결
+// v48.2: 로그인 버튼 완전 수정 + Supabase 실제 로그인 + AppState + 업체관리 customers + 오늘배정 routes/route_stops + 기사앱 pickup_records 직접연결
 const NEP_SUPABASE_URL='https://crwevoclldrrmpcjurwy.supabase.co';
 const NEP_SUPABASE_PUBLISHABLE_KEY='sb_publishable_D0_5l44LvR-0fnfpHAuwjQ__u5v66aY';
 const NEP_APP_STATE_KEY='nep_main';
@@ -7951,8 +7951,9 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
 </script>
 
 
+
 <script>
-// v48.1 로그인 버튼 안전 패치: inline onclick이 막혀도 직접 버튼에 이벤트를 연결합니다.
+// v48.2 로그인 완전 패치: 버튼 클릭/엔터/빈칸 검증을 HTML 이벤트와 JS 이벤트 둘 다로 처리합니다.
 (function(){
   function el(id){ return document.getElementById(id); }
   function setMsg(txt){ var m=el('loginMsg'); if(m) m.textContent=txt||''; }
@@ -7961,75 +7962,61 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     var msg=String((e&&e.message)||e||'');
     if(msg.indexOf('Invalid login credentials')>=0) return '이메일 또는 비밀번호가 맞지 않습니다.';
     if(msg.indexOf('Email not confirmed')>=0) return '이메일 인증이 완료되지 않은 계정입니다.';
+    if(msg.indexOf('Failed to fetch')>=0) return '네트워크 연결 또는 Supabase 접속 문제입니다.';
     return msg || '로그인에 실패했습니다.';
   }
-  async function safeLogin(ev){
+  async function hardLogin(ev){
     if(ev && ev.preventDefault) ev.preventDefault();
+    if(ev && ev.stopPropagation) ev.stopPropagation();
     var idEl=el('loginId'), pwEl=el('loginPw');
     var id=(idEl&&idEl.value?String(idEl.value):'').trim();
     var pw=(pwEl&&pwEl.value?String(pwEl.value):'');
     if(!id || !pw){ setMsg('아이디와 비밀번호를 입력하세요.'); return false; }
-    var loginMap={
-      admin:'nepkoreateam@gmail.com',
-      driver1:'driver1@nepkorea.local',
-      driver2:'driver2@nepkorea.local',
-      cust1:'cust1@nepkorea.local',
-      cust2:'cust2@nepkorea.local'
-    };
+    var loginMap={admin:'nepkoreateam@gmail.com',driver1:'driver1@nepkorea.local',driver2:'driver2@nepkorea.local',cust1:'cust1@nepkorea.local',cust2:'cust2@nepkorea.local'};
     var email=id.indexOf('@')>=0 ? id : (loginMap[id.toLowerCase()] || id);
     try{
       setMsg('로그인 버튼 작동 확인 · Supabase 로그인 중입니다.');
-      if(typeof NEP_SUPABASE_MODE!=='undefined' && NEP_SUPABASE_MODE){
-        if(typeof nepSupa==='undefined' || !nepSupa) throw new Error('Supabase 연결 객체가 없습니다. 새로고침 후 다시 시도해주세요.');
-        var res=await nepSupa.auth.signInWithPassword({email:email,password:pw});
-        if(res.error) throw res.error;
-        if(!res.data || !res.data.user) throw new Error('로그인 사용자 정보를 받지 못했습니다.');
-        var profile=await supabaseGetProfile(res.data.user);
-        window.me=profileToMe(profile,res.data.user);
-        // 기존 코드의 전역 me/db는 window 속성이 아닐 수 있어 직접 대입도 시도합니다.
-        try{ me=window.me; }catch(_e){}
-        await loadSupabaseAppState();
-        try{ if(typeof loadSupabaseCustomersDirect==='function') await loadSupabaseCustomersDirect(); }catch(_e){}
-        setMsg('');
-        render();
-        return false;
+      if(typeof nepSupa==='undefined' || !nepSupa){
+        throw new Error('Supabase 연결 객체가 없습니다. v48.2 파일이 완전히 로드되지 않았습니다. Ctrl+F5 후 다시 시도해주세요.');
       }
-      if(typeof db!=='undefined' && db && db.users){
-        var found=db.users.find(function(x){return x.id===id && x.pw===pw;});
-        if(!found){ setMsg('아이디가 없거나 비밀번호가 맞지 않습니다.'); return false; }
-        if(found.active===false){ setMsg('퇴사/차단된 계정입니다. 로그인할 수 없습니다.'); return false; }
-        try{ me=found; }catch(_e){ window.me=found; }
-        render();
-        return false;
-      }
-      throw new Error('로그인 환경을 찾지 못했습니다. 페이지를 강력 새로고침해주세요.');
+      var res=await nepSupa.auth.signInWithPassword({email:email,password:pw});
+      if(res.error) throw res.error;
+      if(!res.data || !res.data.user) throw new Error('로그인 사용자 정보를 받지 못했습니다.');
+      var profile=await supabaseGetProfile(res.data.user);
+      try{ me=profileToMe(profile,res.data.user); }catch(_e){ window.me=profileToMe(profile,res.data.user); }
+      await loadSupabaseAppState();
+      try{ if(typeof loadSupabaseCustomersDirect==='function') await loadSupabaseCustomersDirect(); }catch(_e){}
+      setMsg('');
+      render();
+      return false;
     }catch(e){
       setMsg(friendly(e));
       return false;
     }
   }
-  window.login=safeLogin;
+  window.NEP_HARD_LOGIN=hardLogin;
+  window.login=hardLogin;
   function bind(){
-    var btn=document.querySelector('.finalLoginBtn') || document.querySelector('#loginView button.primary');
+    var btn=el('nepLoginButton') || document.querySelector('.finalLoginBtn') || document.querySelector('#loginView button.primary');
     if(btn){
-      btn.onclick=null;
-      if(!btn.dataset.nepLoginBound){
-        btn.dataset.nepLoginBound='1';
-        btn.addEventListener('click', safeLogin);
+      btn.setAttribute('type','button');
+      btn.onclick=hardLogin;
+      if(!btn.dataset.nepLoginBound2){
+        btn.dataset.nepLoginBound2='1';
+        btn.addEventListener('click', hardLogin, true);
       }
     }
     ['loginId','loginPw'].forEach(function(id){
       var node=el(id);
-      if(node && !node.dataset.nepEnterBound){
-        node.dataset.nepEnterBound='1';
-        node.addEventListener('keydown', function(ev){
-          if(ev.key==='Enter') safeLogin(ev);
-        });
+      if(node && !node.dataset.nepEnterBound2){
+        node.dataset.nepEnterBound2='1';
+        node.addEventListener('keydown', function(ev){ if(ev.key==='Enter') hardLogin(ev); });
       }
     });
-    setMsg('');
   }
-  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', bind); else bind();
+  bind();
+  setTimeout(bind,300);
+  setTimeout(bind,1200);
 })();
 </script>
 

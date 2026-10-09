@@ -1,3 +1,11 @@
+# NEP Korea v48.2 로그인 완전 수정본
+
+- 로그인 화면에 v48.2 표시가 보입니다.
+- 빈칸으로 로그인 버튼을 누르면 “아이디와 비밀번호를 입력하세요.” 문구가 떠야 합니다.
+- 기사 계정 driver1 / driver2 로그인 버튼 이벤트를 강제로 다시 연결했습니다.
+- service-worker 캐시를 삭제하고 네트워크 우선으로 동작하도록 수정했습니다.
+
+접속: https://nepkoreateam.github.io/nep-korea-system/?v=48.2&fresh=100
 # NEP Korea v48.1 기사 로그인 버튼 수정본
 
 수정 내용:
