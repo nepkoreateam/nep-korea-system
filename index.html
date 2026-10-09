@@ -1,4 +1,4 @@
-<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NEP Korea 수거관리 v46 업체관리_CustomersDB</title>
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NEP Korea 수거관리 v47 오늘배정_RoutesDB</title>
 <meta name="theme-color" content="#0f3f8c">
 
 <meta name="application-name" content="NEP 수거관리">
@@ -3369,7 +3369,7 @@ button.danger,
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 const today='2026-07-23', month='2026-07';
-// v46: Supabase 실제 로그인 + AppState + 업체관리 customers 테이블 직접연결
+// v47: Supabase 실제 로그인 + AppState + 업체관리 customers 직접연결 + 오늘배정 routes/route_stops 직접연결
 const NEP_SUPABASE_URL='https://crwevoclldrrmpcjurwy.supabase.co';
 const NEP_SUPABASE_PUBLISHABLE_KEY='sb_publishable_D0_5l44LvR-0fnfpHAuwjQ__u5v66aY';
 const NEP_APP_STATE_KEY='nep_main';
@@ -3416,6 +3416,7 @@ function supabaseFriendlyError(error){
   const msg=String(error?.message||error||'');
   if(msg.includes('Invalid login credentials')) return '이메일 또는 비밀번호가 맞지 않습니다.';
   if(msg.includes('Email not confirmed')) return '이메일 인증이 완료되지 않은 계정입니다. Supabase Users에서 Confirm 처리해주세요.';
+  if(msg.includes('app_route_key') || msg.includes('app_driver_id') || msg.includes('route_stops')) return 'v47 오늘배정 DB 컬럼이 아직 없습니다. 04 SQL을 먼저 실행해주세요.';
   if(msg.includes('app_customer_id') || msg.includes('route_plans') || msg.includes('pickup_days_ko')) return 'v46 업체관리 DB 컬럼이 아직 없습니다. 03 SQL을 먼저 실행해주세요.';
   if(msg.includes('app_states') || msg.includes('relation')) return 'app_states 테이블이 아직 없습니다. 02 SQL을 먼저 실행해주세요.';
   return msg || '요청에 실패했습니다.';
@@ -3576,6 +3577,159 @@ async function syncAllCustomersToSupabase(){
   renderAdmin(); goAdminTab('customers');
   alert(`업체 ${rows.length}곳을 Supabase customers 테이블에 저장했습니다.`);
 }
+
+
+// v47: 오늘배정 화면은 public.routes / public.route_stops 테이블에도 직접 저장합니다.
+const NEP_ROUTES_DIRECT_MODE = true;
+let nepDriverUuidMapCache=null;
+let nepCustomerUuidMapCache=null;
+
+async function getSupabaseDriverUuidMap(force=false){
+  if(nepDriverUuidMapCache && !force) return nepDriverUuidMapCache;
+  const {data,error}=await nepSupa.from('drivers').select('id,name,app_driver_id').not('app_driver_id','is',null);
+  if(error) throw new Error('기사 DB 조회 실패: '+supabaseFriendlyError(error));
+  const map={};
+  (data||[]).forEach(r=>{
+    if(r.app_driver_id) map[String(r.app_driver_id)] = r.id;
+  });
+  nepDriverUuidMapCache=map;
+  return map;
+}
+
+async function getSupabaseCustomerUuidMap(force=false){
+  if(nepCustomerUuidMapCache && !force) return nepCustomerUuidMapCache;
+  const {data,error}=await nepSupa.from('customers').select('id,app_customer_id,customer_code,name').not('app_customer_id','is',null);
+  if(error) throw new Error('업체 DB 조회 실패: '+supabaseFriendlyError(error));
+  const map={};
+  (data||[]).forEach(r=>{
+    const key=r.app_customer_id || r.customer_code;
+    if(key) map[String(key)] = r.id;
+  });
+  nepCustomerUuidMapCache=map;
+  return map;
+}
+
+async function syncCurrentRouteToSupabase(){
+  const d=routeDateVal();
+  const did=document.getElementById('routeDriver')?.value;
+  await syncRoutesForDateToSupabase(d, did?[did]:null);
+}
+
+async function syncAllRoutesForDateToSupabase(){
+  const d=routeDateVal();
+  await syncRoutesForDateToSupabase(d, null);
+}
+
+async function syncRoutesForDateToSupabase(d=today, onlyDriverIds=null){
+  if(!NEP_SUPABASE_MODE || !nepSupa || !me || me.role!=='admin' || !NEP_ROUTES_DIRECT_MODE){
+    return alert('관리자 로그인 후 사용할 수 있습니다.');
+  }
+  const driverMap=await getSupabaseDriverUuidMap(true);
+  const customerMap=await getSupabaseCustomerUuidMap(true);
+  const targetDrivers=(onlyDriverIds?activeDrivers().filter(dr=>onlyDriverIds.includes(dr.id)):activeDrivers());
+  const missing=[];
+  let totalStops=0;
+
+  for(const dr of targetDrivers){
+    const driverUuid=driverMap[dr.id];
+    if(!driverUuid){ missing.push(`${dr.name} 기사 DB 연결 없음`); continue; }
+
+    const routeKey=`${d}__${dr.id}`;
+    const rows=(db.assignments||[])
+      .filter(a=>a.date===d && a.driverId===dr.id)
+      .sort((a,b)=>(Number(a.order)||9999)-(Number(b.order)||9999));
+
+    const routePayload={
+      app_route_key: routeKey,
+      route_date: d,
+      driver_id: driverUuid,
+      status: 'planned',
+      memo: `NEP v47 오늘배정 동기화 · ${dr.name} · ${rows.length}곳`
+    };
+
+    const {data:route,error:routeErr}=await nepSupa
+      .from('routes')
+      .upsert(routePayload,{onConflict:'app_route_key'})
+      .select('id')
+      .single();
+    if(routeErr) throw new Error('코스 DB 저장 실패: '+supabaseFriendlyError(routeErr));
+
+    const {error:delErr}=await nepSupa.from('route_stops').delete().eq('route_id',route.id);
+    if(delErr) throw new Error('기존 코스 순서 삭제 실패: '+supabaseFriendlyError(delErr));
+
+    const stopRows=[];
+    rows.forEach((a,i)=>{
+      const cu=c(a.customerId);
+      const customerUuid=customerMap[a.customerId];
+      if(!customerUuid){ missing.push(`${cu.name||a.customerId} 업체 DB 연결 없음`); return; }
+      stopRows.push({
+        route_id: route.id,
+        customer_id: customerUuid,
+        app_customer_id: String(a.customerId),
+        stop_order: Number(a.order)||i+1,
+        planned_liters: Number(cu.includedLiter||0),
+        status: 'pending',
+        admin_memo: cu.memo||null,
+        app_meta: {source:'nep_v47', app_driver_id:dr.id, app_customer_id:String(a.customerId)}
+      });
+    });
+
+    if(stopRows.length){
+      const {error:stopErr}=await nepSupa.from('route_stops').insert(stopRows);
+      if(stopErr) throw new Error('코스 순서 DB 저장 실패: '+supabaseFriendlyError(stopErr));
+      totalStops+=stopRows.length;
+    }
+  }
+
+  await saveSupabaseAppState(true);
+  if(missing.length){
+    alert(`코스DB 동기화 완료: ${totalStops}곳 저장\n\n확인 필요:\n- ${missing.slice(0,8).join('\n- ')}${missing.length>8?'\n- ...':''}`);
+  }else{
+    alert(`코스DB 동기화 완료: ${d} 기준 ${totalStops}곳 저장`);
+  }
+}
+
+async function loadRoutesForDateFromSupabase(d=routeDateVal()){
+  if(!NEP_SUPABASE_MODE || !nepSupa || !me || me.role!=='admin'){
+    return alert('관리자 로그인 후 사용할 수 있습니다.');
+  }
+  const {data:routes,error:routeErr}=await nepSupa
+    .from('routes')
+    .select('id,route_date,app_route_key,drivers(app_driver_id,name)')
+    .eq('route_date',d);
+  if(routeErr) throw new Error('코스 DB 불러오기 실패: '+supabaseFriendlyError(routeErr));
+  if(!routes || !routes.length) return alert(`${d} 날짜에 저장된 코스DB가 없습니다.`);
+
+  const routeIds=routes.map(r=>r.id);
+  const driverByRoute={};
+  routes.forEach(r=>{
+    const dr=Array.isArray(r.drivers)?r.drivers[0]:r.drivers;
+    let appDriverId=dr?.app_driver_id || '';
+    if(!appDriverId && r.app_route_key) appDriverId=String(r.app_route_key).split('__')[1]||'';
+    driverByRoute[r.id]=appDriverId;
+  });
+
+  const {data:stops,error:stopErr}=await nepSupa
+    .from('route_stops')
+    .select('route_id,stop_order,app_customer_id,customers(app_customer_id,name)')
+    .in('route_id',routeIds)
+    .order('stop_order',{ascending:true});
+  if(stopErr) throw new Error('코스 순서 DB 불러오기 실패: '+supabaseFriendlyError(stopErr));
+
+  const next=[];
+  (stops||[]).forEach(st=>{
+    const customerObj=Array.isArray(st.customers)?st.customers[0]:st.customers;
+    const cid=st.app_customer_id || customerObj?.app_customer_id;
+    const did=driverByRoute[st.route_id];
+    if(cid && did) next.push({date:d,driverId:did,customerId:cid,order:Number(st.stop_order)||999,auto:false});
+  });
+  db.assignments=(db.assignments||[]).filter(a=>a.date!==d).concat(next);
+  db.assignments.sort((a,b)=>String(a.date).localeCompare(String(b.date))||String(a.driverId).localeCompare(String(b.driverId))||(Number(a.order)||0)-(Number(b.order)||0));
+  await saveSupabaseAppState(true);
+  renderAdmin(); goAdminTab('assign');
+  alert(`${d} 코스DB에서 ${next.length}곳을 불러왔습니다.`);
+}
+
 
 async function loadSession(){
   if(NEP_SUPABASE_MODE){
@@ -4044,7 +4198,7 @@ function autoRefreshTodayAssignments(quiet=true){
 }
 function syncRoutePlansForDriver(did,d){let dk=dayKo(d); db.assignments.filter(a=>a.date===d&&a.driverId===did).forEach(a=>{let cu=c(a.customerId); if(cu.id){cu.routePlans=cu.routePlans||{}; cu.routePlans[dk]={driverId:did,order:a.order}}})}
 function clearRoutePlanIfMatch(cid,did,d){let cu=c(cid), dk=dayKo(d); if(cu.routePlans&&cu.routePlans[dk]&&cu.routePlans[dk].driverId===did) delete cu.routePlans[dk]}
-function renderAssign(){let drivers=activeDrivers(); assign.innerHTML=`<div class="card"><h3>정기 코스 배정</h3><p class="muted">업체관리의 수거요일·담당기사·방문순번을 기준으로 오늘배정이 자동 생성됩니다. 이 화면에서는 오늘만 예외로 순서 변경, 업체 추가·삭제가 가능합니다.</p><div class="grid"><input id="routeDate" type="date" value="${today}" onchange="ensureRouteThenDraw()"><select id="routeDriver" onchange="ensureRouteThenDraw()">${drivers.map(d=>`<option value="${d.id}">${d.name}</option>`).join('')}</select><input id="routeSearch" placeholder="추가할 업체 검색" oninput="drawRouteSearch()"><select id="routeCustomer"></select><input id="assignOrder" type="number" min="1" placeholder="넣을 순서 번호 예: 3"><button class="primary" onclick="addRouteEasy()">선택 업체 넣기</button><button class="green" onclick="rebuildAssignmentsForDateFromRules(routeDateVal(),false); save(); drawRouteSearch(); drawRouteBoard(); renderDash()">업체관리 기준 자동생성</button></div><div id="routeHint" class="muted" style="margin-top:10px"></div></div><div id="routeBoard"></div>`; ensureRouteThenDraw()} 
+function renderAssign(){let drivers=activeDrivers(); assign.innerHTML=`<div class="card"><h3>정기 코스 배정</h3><p class="muted">업체관리의 수거요일·담당기사·방문순번을 기준으로 오늘배정이 자동 생성됩니다. 이 화면에서는 오늘만 예외로 순서 변경, 업체 추가·삭제가 가능합니다.</p><div class="grid"><input id="routeDate" type="date" value="${today}" onchange="ensureRouteThenDraw()"><select id="routeDriver" onchange="ensureRouteThenDraw()">${drivers.map(d=>`<option value="${d.id}">${d.name}</option>`).join('')}</select><input id="routeSearch" placeholder="추가할 업체 검색" oninput="drawRouteSearch()"><select id="routeCustomer"></select><input id="assignOrder" type="number" min="1" placeholder="넣을 순서 번호 예: 3"><button class="primary" onclick="addRouteEasy()">선택 업체 넣기</button><button class="green" onclick="rebuildAssignmentsForDateFromRules(routeDateVal(),false); save(); drawRouteSearch(); drawRouteBoard(); renderDash()">업체관리 기준 자동생성</button><button class="smallbtn primary" onclick="syncCurrentRouteToSupabase()">코스DB 동기화</button><button class="smallbtn" onclick="loadRoutesForDateFromSupabase()">코스DB 불러오기</button></div><div id="routeHint" class="muted" style="margin-top:10px">v47: 오늘배정 저장 후 코스DB 동기화를 누르면 routes / route_stops 테이블에 저장됩니다.</div></div><div id="routeBoard"></div>`; ensureRouteThenDraw()} 
 function updateAutoPreview(){let d=document.getElementById('autoDate')?.value||today, html=`${d} (${dayKo(d)}) 자동 배정 예상: `; let parts=activeDrivers().map(dr=>`${dr.name} ${activeCustomersForDay(dr.id,d).length}곳`); let el=document.getElementById('autoPreview'); if(el) el.innerHTML=html+parts.join(' · ')}
 function ensureRouteThenDraw(){let did=document.getElementById('routeDriver')?.value, d=routeDateVal(); if(did&&d&&!db.assignments.some(a=>a.date===d&&a.driverId===did)){buildRouteForDriver(did,d,false);save()} drawRouteSearch(); drawRouteBoard()}
 function rebuildRouteFromWeekday(){let did=routeDriver.value,d=routeDateVal(); if(!confirm(`${d} ${dayKo(d)}요일 기준으로 ${u(did).name} 코스를 다시 정리할까요? 기존 순서 변경은 초기화됩니다.`))return; buildRouteForDriver(did,d,false);save();drawRouteSearch();drawRouteBoard();renderDash()}
