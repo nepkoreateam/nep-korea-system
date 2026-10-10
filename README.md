@@ -1,19 +1,20 @@
-# NEP Korea v50 — 월말 관리대장 DB 연결
+# NEP Korea v51 문자 발송대기 DB 연결
 
-추가된 기능
-- 월 선택 시 `pickup_records`의 실제 `completed` 수거기록을 불러옴
-- 브라우저 샘플 수거내역 대신 실제 DB 수거내역으로 관리대장 표시
-- `관리대장 DB 저장` 버튼으로 업체별 월 합계/수거건수/관리대장 문구를 `monthly_ledgers`에 저장
-- 같은 업체/연월은 다시 저장하면 갱신(upsert)
+## 1. Supabase SQL 실행
+`08_NEP_Supabase_문자발송대기DB_v51.sql` 전체를 SQL Editor에서 실행하세요.
 
-설치
-1. Supabase SQL Editor에서 `07_NEP_Supabase_월말관리대장DB_v50.sql` 실행
-2. `v50 monthly ledger DB ready` 확인
-3. 이 폴더 파일을 GitHub Pages 저장소에 덮어쓰기
-4. `?v=50&fresh=1` 접속
-5. 관리자 > 월말 관리대장 > 2026-07 선택 > 수거DB 새로고침 > 관리대장 DB 저장
+성공 문구:
 
-주의
-- v50부터 월말 관리대장 화면은 실제 `pickup_records`에 저장된 완료기록만 표시합니다.
-- 과거 샘플 데이터가 DB에 저장되어 있지 않다면 화면에서 사라지는 것이 정상입니다.
-- 고객 공개는 아직 기본 `false`입니다. 고객 계정 단계에서 공개 기능을 연결합니다.
+`v51 message queue DB ready`
+
+## 2. GitHub 업로드
+압축을 풀어 기존 GitHub Pages 파일에 덮어쓰기 후 Commit changes.
+
+접속 주소:
+
+`https://nepkoreateam.github.io/nep-korea-system/?v=51&fresh=1`
+
+## 3. 테스트 순서
+관리자 로그인 → 월말 관리대장 → 수거DB 새로고침 → 관리대장 DB 저장 → 고객발송 → 전체 문자대기 저장.
+
+v51에서는 실제 문자가 바로 발송되지 않습니다. Supabase `message_queue`에 `queued` 상태로 쌓이고, 추후 메인 PC의 KT SmartMessage 연동 프로그램이 이 목록을 읽어 발송하는 구조입니다.

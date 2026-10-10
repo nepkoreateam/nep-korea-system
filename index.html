@@ -1,4 +1,4 @@
-<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NEP Korea 수거관리 v50 월말관리대장 DB연결</title>
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NEP Korea 수거관리 v51 문자발송대기 DB연결</title>
 <meta name="theme-color" content="#0f3f8c">
 
 <meta name="application-name" content="NEP 수거관리">
@@ -3357,7 +3357,7 @@ button.danger,
     <p>NEP Korea</p>
   </div>
 </div>
-<h2>로그인</h2><div style="margin:8px 0 12px;padding:10px;border:1px solid #c7dbff;background:#eef4ff;border-radius:10px;font-size:13px;color:#0848a4;font-weight:700">v50 월말 관리대장 DB 연결 · 실제 pickup_records 기준으로 월별 관리대장을 불러옵니다.</div><p class="muted">Supabase 계정으로 로그인하세요. 관리자: admin, 기사: driver1 / driver2</p><input id="loginId" placeholder="이메일 또는 admin" autocomplete="username"><br><br><input id="loginPw" type="password" placeholder="비밀번호" autocomplete="current-password"><br><br><button type="button" id="nepLoginButton" class="primary finalLoginBtn" onclick="return window.NEP_HARD_LOGIN ? window.NEP_HARD_LOGIN(event) : (document.getElementById('loginMsg').textContent='페이지 준비 중입니다. 2초 후 다시 눌러주세요.', false)">로그인</button><p id="loginMsg" class="muted"></p></section>
+<h2>로그인</h2><div style="margin:8px 0 12px;padding:10px;border:1px solid #c7dbff;background:#eef4ff;border-radius:10px;font-size:13px;color:#0848a4;font-weight:700">v51 문자 발송대기 DB 연결 · 월말 관리대장을 message_queue에 저장합니다.</div><p class="muted">Supabase 계정으로 로그인하세요. 관리자: admin, 기사: driver1 / driver2</p><input id="loginId" placeholder="이메일 또는 admin" autocomplete="username"><br><br><input id="loginPw" type="password" placeholder="비밀번호" autocomplete="current-password"><br><br><button type="button" id="nepLoginButton" class="primary finalLoginBtn" onclick="return window.NEP_HARD_LOGIN ? window.NEP_HARD_LOGIN(event) : (document.getElementById('loginMsg').textContent='페이지 준비 중입니다. 2초 후 다시 눌러주세요.', false)">로그인</button><p id="loginMsg" class="muted"></p></section>
 <section id="appView" class="hidden">
 <div class="nepBrandHeader">
   <div class="nepBrandHeaderTop">
@@ -3373,7 +3373,7 @@ button.danger,
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 const today='2026-07-23', month='2026-07';
-// v48.3: 로그인 안내문구 표시 수정 + Supabase 실제 로그인 + AppState + 업체관리 customers + 오늘배정 routes/route_stops + 기사앱 pickup_records 직접연결
+// v51: Supabase 실제 로그인 + AppState + 업체관리/오늘배정/수거기록/월말관리대장 + 문자 발송대기 DB 직접연결
 const NEP_SUPABASE_URL='https://crwevoclldrrmpcjurwy.supabase.co';
 const NEP_SUPABASE_PUBLISHABLE_KEY='sb_publishable_D0_5l44LvR-0fnfpHAuwjQ__u5v66aY';
 const NEP_APP_STATE_KEY='nep_main';
@@ -3420,6 +3420,7 @@ function supabaseFriendlyError(error){
   const msg=String(error?.message||error||'');
   if(msg.includes('Invalid login credentials')) return '이메일 또는 비밀번호가 맞지 않습니다.';
   if(msg.includes('Email not confirmed')) return '이메일 인증이 완료되지 않은 계정입니다. Supabase Users에서 Confirm 처리해주세요.';
+  if(msg.includes('message_queue') || msg.includes('app_message_key')) return 'v51 문자 발송대기 DB가 아직 준비되지 않았습니다. 08 SQL을 먼저 실행해주세요.';
   if(msg.includes('app_pickup_key') || msg.includes('pickup_records')) return 'v48 기사앱 수거완료 DB 컬럼이 아직 없습니다. 05 SQL을 먼저 실행해주세요.';
   if(msg.includes('app_route_key') || msg.includes('app_driver_id') || msg.includes('route_stops')) return 'v47 오늘배정 DB 컬럼이 아직 없습니다. 04 SQL을 먼저 실행해주세요.';
   if(msg.includes('app_customer_id') || msg.includes('route_plans') || msg.includes('pickup_days_ko')) return 'v46 업체관리 DB 컬럼이 아직 없습니다. 03 SQL을 먼저 실행해주세요.';
@@ -4951,14 +4952,28 @@ function deleteUser(i){if(db.users[i].id===me.id)return alert('현재 로그인�
 
 function ensureSendData(){db.ledgerSendLogs=Array.isArray(db.ledgerSendLogs)?db.ledgerSendLogs:[]}
 function sendLogFor(m,cid){ensureSendData(); return db.ledgerSendLogs.find(x=>x.month===m&&x.customerId===cid)||null}
+function sendStatusHtml(log){
+  if(!log)return '<span class="pill wait">미발송</span>';
+  if(log.status==='queued')return `<span class="pill wait">발송대기</span><div class="muted">${shortDateTime(log.queuedAt||log.sentAt)}</div>`;
+  if(log.status==='failed')return `<span class="pill bad">실패</span><div class="muted">${htmlSafe(log.error||'')}</div>`;
+  return `<span class="pill ok">완료</span><div class="muted">${shortDateTime(log.sentAt)}</div>`;
+}
+function upsertSendLogLocal(m,r,status='queued',method='sms_queue',extra={}){
+  ensureSendData();
+  db.ledgerSendLogs=db.ledgerSendLogs.filter(x=>!(x.month===m&&x.customerId===r.cu.id));
+  const now=new Date().toISOString();
+  db.ledgerSendLogs.unshift({
+    month:m,customerId:r.cu.id,customerName:r.cu.name,email:r.cu.email||'',phone:r.cu.phone||'',
+    method,status,queuedAt:status==='queued'?now:(extra.queuedAt||''),sentAt:status==='sent'?now:(extra.sentAt||''),
+    sentBy:me?.id||'',error:extra.error||''
+  });
+}
 function markLedgerSent(cid,method='manual'){
   const m=(document.getElementById('sendMonth')?.value)||(document.getElementById('ledgerMonth')?.value)||month;
   const r=ledgerRows(m).find(x=>x.cu.id===cid);
   if(!r)return alert('수거내역이 없습니다.');
-  ensureSendData();
-  db.ledgerSendLogs=db.ledgerSendLogs.filter(x=>!(x.month===m&&x.customerId===cid));
-  db.ledgerSendLogs.unshift({month:m,customerId:cid,customerName:r.cu.name,email:r.cu.email||'',phone:r.cu.phone||'',method,sentAt:new Date().toISOString(),sentBy:me?.id||'',status:'sent'});
-  if(typeof addChangeLog==='function') addChangeLog({type:'ledger_send',customerId:cid,customerName:r.cu.name,detail:`${m} 관리대장 발송처리`,reason:method});
+  upsertSendLogLocal(m,r,'sent',method);
+  if(typeof addChangeLog==='function') addChangeLog({type:'ledger_send',customerId:cid,customerName:r.cu.name,detail:`${m} 관리대장 발송완료 처리`,reason:method});
   save();
   if(document.getElementById('send')) renderSendCenter();
   if(document.getElementById('ledgerOut')) makeLedger();
@@ -4969,16 +4984,76 @@ function markAllLedgerSent(){
   const rows=ledgerRows(m);
   if(!rows.length)return alert('발송처리할 관리대장이 없습니다.');
   if(!confirm(`${m} 관리대장 ${rows.length}건을 전체 발송완료로 처리할까요?`))return;
-  ensureSendData();
-  rows.forEach(r=>{
-    db.ledgerSendLogs=db.ledgerSendLogs.filter(x=>!(x.month===m&&x.customerId===r.cu.id));
-    db.ledgerSendLogs.unshift({month:m,customerId:r.cu.id,customerName:r.cu.name,email:r.cu.email||'',phone:r.cu.phone||'',method:'bulk',sentAt:new Date().toISOString(),sentBy:me?.id||'',status:'sent'});
-  });
-  if(typeof addChangeLog==='function') addChangeLog({type:'ledger_send',detail:`${m} 관리대장 전체 발송처리`,reason:'bulk'});
+  rows.forEach(r=>upsertSendLogLocal(m,r,'sent','bulk'));
+  if(typeof addChangeLog==='function') addChangeLog({type:'ledger_send',detail:`${m} 관리대장 전체 발송완료 처리`,reason:'bulk'});
   save(); renderSendCenter(); alert('전체 발송완료 처리했습니다.');
 }
 function ledgerSmsText(r,m){
-  return `[넵코리아]\n${r.cu.name} ${m} 음식물류 폐기물 수거 관리대장 안내드립니다.\n총 수거량: ${liter(r.totalL)}\n월 정산금액: ${money(r.totalA)}\n관리대장은 이메일 또는 요청하신 방법으로 전달드리겠습니다.`;
+  return `[넵코리아]\n${r.cu.name} ${m} 음식물류 폐기물 수거 관리대장 안내드립니다.\n총 수거량: ${liter(r.totalL)}\n월 정산금액: ${money(r.totalA)}\n상세 관리대장은 별도 안내 또는 요청 시 전달드리겠습니다.`;
+}
+function ledgerMessageQueuePayload(r,m,customerUuid){
+  return {
+    app_message_key:`monthly_ledger_sms:${m}:${r.cu.id}`,
+    customer_id:customerUuid,
+    channel:'sms',
+    recipient:String(r.cu.phone||'').trim(),
+    title:`NEP ${m} 관리대장 - ${r.cu.name}`,
+    message_body:ledgerSmsText(r,m),
+    status:'queued',
+    provider:'kt_smartmessage',
+    attempts:0,
+    requested_by:me?.profileId||null,
+    requested_at:new Date().toISOString(),
+    app_meta:{source:'nep_v51',type:'monthly_ledger',month:m,app_customer_id:r.cu.id,customer_name:r.cu.name,total_liters:Number(r.totalL||0),total_amount:Number(r.totalA||0)}
+  };
+}
+async function queueLedgerSmsToSupabase(cid){
+  const m=(document.getElementById('sendMonth')?.value)||(document.getElementById('ledgerMonth')?.value)||month;
+  const r=ledgerRows(m).find(x=>x.cu.id===cid);
+  if(!r)return alert('수거내역이 없습니다.');
+  if(!r.cu.phone)return alert('업체 정보에 휴대폰 번호가 없습니다.');
+  if(!NEP_SUPABASE_MODE||!nepSupa||!me||me.role!=='admin')return alert('관리자 로그인 후 사용할 수 있습니다.');
+  try{
+    const customerMap=await getSupabaseCustomerUuidMap(true);
+    const customerUuid=customerMap[r.cu.id];
+    if(!customerUuid)return alert(`${r.cu.name} 업체 DB 연결이 없습니다. 업체DB 동기화를 먼저 해주세요.`);
+    const payload=ledgerMessageQueuePayload(r,m,customerUuid);
+    const {error}=await nepSupa.from('message_queue').upsert(payload,{onConflict:'app_message_key'});
+    if(error)throw error;
+    upsertSendLogLocal(m,r,'queued','sms_queue');
+    if(typeof addChangeLog==='function') addChangeLog({type:'sms_queue',customerId:r.cu.id,customerName:r.cu.name,detail:`${m} 관리대장 문자 발송대기 저장`,reason:'message_queue'});
+    save();
+    if(document.getElementById('send')) renderSendCenter();
+    if(document.getElementById('ledgerOut')) makeLedger();
+    alert(`${r.cu.name} 문자 발송대기 DB에 저장했습니다.`);
+  }catch(e){
+    alert('문자 발송대기 저장 실패: '+supabaseFriendlyError(e));
+  }
+}
+async function queueAllLedgerSmsToSupabase(){
+  const m=(document.getElementById('sendMonth')?.value)||(document.getElementById('ledgerMonth')?.value)||month;
+  const rows=ledgerRows(m).filter(r=>r.cu.phone);
+  if(!rows.length)return alert('휴대폰 번호가 있는 관리대장이 없습니다.');
+  if(!NEP_SUPABASE_MODE||!nepSupa||!me||me.role!=='admin')return alert('관리자 로그인 후 사용할 수 있습니다.');
+  if(!confirm(`${m} 관리대장 문자 ${rows.length}건을 발송대기 DB에 저장할까요?\n\n※ 아직 실제 문자는 발송되지 않고, KT 연동 프로그램이 보낼 대기목록만 생성됩니다.`))return;
+  try{
+    const customerMap=await getSupabaseCustomerUuidMap(true);
+    const payload=[]; const missing=[];
+    rows.forEach(r=>{
+      const customerUuid=customerMap[r.cu.id];
+      if(!customerUuid){missing.push(r.cu.name||r.cu.id); return;}
+      payload.push(ledgerMessageQueuePayload(r,m,customerUuid));
+    });
+    if(!payload.length)return alert('업체 DB 연결이 없어 문자 발송대기를 저장하지 못했습니다. 업체DB 동기화를 먼저 해주세요.');
+    const {error}=await nepSupa.from('message_queue').upsert(payload,{onConflict:'app_message_key'});
+    if(error)throw error;
+    rows.forEach(r=>{ if(customerMap[r.cu.id]) upsertSendLogLocal(m,r,'queued','sms_queue_bulk'); });
+    if(typeof addChangeLog==='function') addChangeLog({type:'sms_queue',detail:`${m} 관리대장 문자 ${payload.length}건 발송대기 저장`,reason:'bulk'});
+    save(); renderSendCenter(); if(document.getElementById('ledgerOut')) makeLedger();
+    alert(`문자 발송대기 DB 저장 완료: ${payload.length}건${missing.length?`\n\nDB 연결 누락: ${missing.join(', ')}`:''}`);
+  }catch(e){
+    alert('전체 문자 발송대기 저장 실패: '+supabaseFriendlyError(e));
+  }
 }
 function exportSmsUploadCsv(){
   const m=(document.getElementById('sendMonth')?.value)||(document.getElementById('ledgerMonth')?.value)||month;
@@ -4997,6 +5072,7 @@ function exportEmailListCsv(){
   csv(lines,`NEP_이메일_발송목록_${m}.csv`);
 }
 
+
 function filterRowsByCustomer(rows,q){
   q=String(q||'').trim().toLowerCase();
   if(!q)return rows;
@@ -5010,24 +5086,26 @@ function renderSendCenter(){
   ensureSendData();
   const m=(document.getElementById('sendMonth')?.value)||month;
   const rows=ledgerRows(m);
-  const sent=rows.filter(r=>sendLogFor(m,r.cu.id)).length;
+  const sent=rows.filter(r=>sendLogFor(m,r.cu.id)?.status==='sent').length;
+  const queued=rows.filter(r=>sendLogFor(m,r.cu.id)?.status==='queued').length;
   send.innerHTML=`
     <div class="card hero">
       <h3>고객발송</h3>
-      <p class="muted">월말 관리대장을 고객에게 보낼 수 있도록 문자·이메일 발송자료를 정리합니다.</p>
+      <p class="muted">월말 관리대장 문자 발송대기를 Supabase message_queue에 저장합니다. 실제 발송은 메인 PC의 KT 연동 프로그램에서 처리합니다.</p>
       <div class="businessPicker">
         <div><label class="muted">발송 연월</label><input id="sendMonth" type="month" value="${m}" oninput="renderSendCenter()"></div>
-        <div><label class="muted">발송 완료</label><b>${sent} / ${rows.length}</b></div>
-        <div><label class="muted">문자업체</label><span class="pill wait">업로드 파일 방식</span></div>
+        <div><label class="muted">발송대기</label><b>${queued} / ${rows.length}</b></div><div><label class="muted">발송완료</label><b>${sent} / ${rows.length}</b></div>
+        <div><label class="muted">문자방식</label><span class="pill wait">DB 대기목록</span></div>
       </div>
       <div class="row sendActions">
+        <button class="primary" onclick="queueAllLedgerSmsToSupabase()">전체 문자대기 저장</button>
         <button class="green" onclick="exportSmsUploadCsv()">문자업체 업로드 파일</button>
         <button class="primary" onclick="exportAllCustomerLedgerXls()">고객용 관리대장 엑셀</button>
         <button class="ghost" onclick="exportEmailListCsv()">이메일 발송목록</button>
         <button class="ghost" onclick="copyAllLedgerMessages()">전체 문구 복사</button>
         <button class="ghost" onclick="markAllLedgerSent()">전체 발송완료 처리</button>
       </div>
-      <div class="excelDocHint">문자 서비스에 로그인해서 대량발송 엑셀/CSV 업로드가 가능하면, 여기서 만든 파일을 업로드하면 됩니다. 문자 API 정보가 있으면 추후 직접 발송으로 연결할 수 있습니다.</div>
+      <div class="excelDocHint">v51부터 문자 버튼은 실제 문자를 바로 보내지 않고 message_queue에 대기목록을 저장합니다. KT 연동 프로그램을 연결하기 전까지는 업로드 파일도 함께 사용할 수 있습니다.</div>
     </div>
     <div class="card">
       <div class="sectionTitle searchTitle">
@@ -5050,13 +5128,13 @@ function drawSendRows(){
   const rows=filterRowsByCustomer(all,q);
   const body=document.getElementById('sendRows');
   if(!body)return;
-  body.innerHTML=rows.length?rows.map(r=>{const log=sendLogFor(m,r.cu.id);return `<tr>
+  body.innerHTML=rows.length?rows.map(r=>{const log=sendLogFor(m,r.cu.id); const statusHtml=sendStatusHtml(log); return `<tr>
           <td class="nameCell"><b>${htmlSafe(r.cu.name)}</b><div class="muted oneLine">${htmlSafe(r.cu.addr||'')}</div></td>
           <td class="contactCell">${htmlSafe(r.cu.phone||'휴대폰 없음')}<br><span class="muted oneLine">${htmlSafe(r.cu.email||'이메일 없음')}</span></td>
           <td>${liter(r.totalL)}</td>
           <td>${money(r.totalA)}</td>
-          <td>${log?`<span class="pill ok">완료</span><div class="muted">${shortDateTime(log.sentAt)}</div>`:'<span class="pill wait">미발송</span>'}</td>
-          <td><div class="row"><button class="smallbtn green" onclick="markLedgerSent('${r.cu.id}','manual')">발송완료</button><button class="smallbtn primary" onclick="exportCustomerLedgerXls('${r.cu.id}')">엑셀</button><button class="smallbtn ghost" onclick="copyLedger('${r.cu.id}')">문구</button><button class="smallbtn ghost" onclick="sendSms('${r.cu.id}')">문자</button><button class="smallbtn ghost" onclick="sendEmail('${r.cu.id}')">이메일</button></div></td>
+          <td>${statusHtml}</td>
+          <td><div class="row"><button class="smallbtn green" onclick="markLedgerSent('${r.cu.id}','manual')">발송완료</button><button class="smallbtn primary" onclick="exportCustomerLedgerXls('${r.cu.id}')">엑셀</button><button class="smallbtn ghost" onclick="copyLedger('${r.cu.id}')">문구</button><button class="smallbtn ghost" onclick="sendSms('${r.cu.id}')">문자대기</button><button class="smallbtn ghost" onclick="sendEmail('${r.cu.id}')">이메일</button></div></td>
         </tr>`}).join(''):`<tr><td colspan="6">${q?'검색 결과가 없습니다.':'해당 월 수거 완료 내역이 없습니다.'}</td></tr>`;
 }
 
@@ -5077,7 +5155,7 @@ function renderLedger(){
         <button class="ghost" onclick="exportAdminMonthlyXls()">월간정산 엑셀</button>
       </div>
     </div>
-    <div class="excelDocHint" id="ledgerDbStatus">v50: 선택한 월의 실제 Supabase 수거기록을 불러옵니다. 확인 후 관리대장 DB 저장을 누르면 월별 확정본이 저장됩니다.</div>
+    <div class="excelDocHint" id="ledgerDbStatus">v51: 관리대장 저장 후 문자대기 버튼을 누르면 message_queue에 발송 대기목록이 저장됩니다.</div>
   </div><div id="ledgerOut"></div>`;
   setTimeout(()=>refreshMonthlyLedgerFromSupabase(month,false),0);
 }
@@ -5268,7 +5346,7 @@ async function generateMonthlyLedgersToSupabase(){
       total_liters:Math.round(Number(r.totalL||0)), pickup_count:r.ps.length, missed_count:0,
       total_amount:Math.round(Number(r.totalA||0)), ledger_text:ledgerText(r,m),
       customer_visible:false, generated_at:new Date().toISOString(), generated_by:me.profileId||null,
-      app_meta:{source:'nep_v50',app_customer_id:r.cu.id,month:m}
+      app_meta:{source:'nep_v51',app_customer_id:r.cu.id,month:m}
     });
   });
   if(!payload.length)return alert('업체 DB 연결이 없어 관리대장을 저장하지 못했습니다. 업체DB 동기화를 먼저 해주세요.');
@@ -5280,7 +5358,7 @@ async function generateMonthlyLedgersToSupabase(){
 
 function ledgerRows(m){return db.customers.map(cu=>{let ps=db.pickups.filter(x=>x.customerId===cu.id&&x.date.startsWith(m)&&x.status==='done').sort((a,b)=>a.date.localeCompare(b.date)); return {cu,ps,totalL:ps.reduce((s,x)=>s+Number(x.liter||0),0),totalA:ps.reduce((s,x)=>s+calc(cu,x.liter),0)}}).filter(r=>r.ps.length)}
 function ledgerText(r,m){let lines=[]; lines.push(`[NEP 음식물류 폐기물 수거 관리대장]`); lines.push(`${m} 수거내역`); lines.push(''); lines.push('수거일 / 기사 / 수거량 / 금액'); r.ps.forEach(x=>lines.push(`${x.date} / ${u(x.driverId).name||x.driverId} / ${liter(x.liter)} / ${money(calc(r.cu,x.liter))}`)); lines.push(''); lines.push(`합계 수거량: ${liter(r.totalL)}`); lines.push(`합계 금액: ${money(r.totalA)}`); return lines.join('\n')}
-function sendSms(cid){let m=ledgerMonth.value, r=ledgerRows(m).find(x=>x.cu.id===cid); if(!r)return alert('수거내역이 없습니다.'); if(!r.cu.phone)return alert('업체 정보에 휴대폰 번호가 없습니다.'); location.href=`sms:${r.cu.phone}?body=${encodeURIComponent(ledgerText(r,m))}`}
+async function sendSms(cid){await queueLedgerSmsToSupabase(cid)}
 function sendEmail(cid){let m=ledgerMonth.value, r=ledgerRows(m).find(x=>x.cu.id===cid); if(!r)return alert('수거내역이 없습니다.'); if(!r.cu.email)return alert('업체 정보에 이메일이 없습니다.'); location.href=`mailto:${r.cu.email}?subject=${encodeURIComponent('NEP '+m+' 관리대장 - '+r.cu.name)}&body=${encodeURIComponent(ledgerText(r,m))}`}
 function copyLedger(cid){let m=ledgerMonth.value, r=ledgerRows(m).find(x=>x.cu.id===cid); if(!r)return alert('수거내역이 없습니다.'); navigator.clipboard.writeText(ledgerText(r,m)); alert(r.cu.name+' 관리대장 문구를 복사했습니다.')}
 function copyAllLedgerMessages(){let m=ledgerMonth.value, txt=ledgerRows(m).map(r=>ledgerText(r,m)).join('\n\n-------------------------\n\n'); if(!txt)return alert('복사할 관리대장이 없습니다.'); navigator.clipboard.writeText(txt); alert('전체 업체 관리대장 문구를 복사했습니다.')}
@@ -5312,7 +5390,7 @@ function makeLedger(){
             <div class="muted">${money(r.cu.baseFee)} / 기본 양 ${Number(r.cu.includedLiter||0).toLocaleString('ko-KR')}L까지, 초과 ${Number(r.cu.unitPrice||0).toLocaleString('ko-KR')}원/L</div>
           </div>
         </div>
-        <div class="row"><button class="smallbtn primary" onclick="exportCustomerLedgerXls('${r.cu.id}')">엑셀</button><button class="smallbtn green" onclick="markLedgerSent('${r.cu.id}','email')">발송완료</button><button class="smallbtn ghost" onclick="copyLedger('${r.cu.id}')">문구 복사</button><button class="smallbtn ghost" onclick="sendSms('${r.cu.id}')">문자</button><button class="smallbtn ghost" onclick="sendEmail('${r.cu.id}')">이메일</button></div>
+        <div class="row"><button class="smallbtn primary" onclick="exportCustomerLedgerXls('${r.cu.id}')">엑셀</button><button class="smallbtn green" onclick="markLedgerSent('${r.cu.id}','email')">발송완료</button><button class="smallbtn ghost" onclick="copyLedger('${r.cu.id}')">문구 복사</button><button class="smallbtn ghost" onclick="sendSms('${r.cu.id}')">문자대기</button><button class="smallbtn ghost" onclick="sendEmail('${r.cu.id}')">이메일</button></div>
       </div>
       <div class="tableScroll"><table><tr><th>수거일</th><th>기사</th><th>수거량</th><th>금액</th><th>메모</th></tr>${r.ps.map(x=>`<tr><td>${htmlSafe(x.date)}</td><td>${htmlSafe(u(x.driverId).name||x.driverId)}</td><td>${liter(x.liter)}</td><td>${money(calc(r.cu,x.liter))}</td><td>${htmlSafe(x.memo||'')}</td></tr>`).join('')}<tr><th>합계</th><th></th><th>${liter(r.totalL)}</th><th>${money(r.totalA)}</th><th></th></tr></table></div>
     </div>`;
