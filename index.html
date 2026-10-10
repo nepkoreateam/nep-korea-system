@@ -3357,7 +3357,7 @@ button.danger,
     <p>NEP Korea</p>
   </div>
 </div>
-<h2>로그인</h2><div style="margin:8px 0 12px;padding:10px;border:1px solid #c7dbff;background:#eef4ff;border-radius:10px;font-size:13px;color:#0848a4;font-weight:700">v48.3 로그인 안내문구 표시 수정본 · 빈칸 로그인 시 아래 안내문구가 떠야 정상입니다.</div><p class="muted">Supabase 계정으로 로그인하세요. 관리자: admin, 기사: driver1 / driver2</p><input id="loginId" placeholder="이메일 또는 admin" autocomplete="username"><br><br><input id="loginPw" type="password" placeholder="비밀번호" autocomplete="current-password"><br><br><button type="button" id="nepLoginButton" class="primary finalLoginBtn" onclick="return window.NEP_HARD_LOGIN ? window.NEP_HARD_LOGIN(event) : (document.getElementById('loginMsg').textContent='페이지 준비 중입니다. 2초 후 다시 눌러주세요.', false)">로그인</button><p id="loginMsg" class="muted"></p></section>
+<h2>로그인</h2><div style="margin:8px 0 12px;padding:10px;border:1px solid #c7dbff;background:#eef4ff;border-radius:10px;font-size:13px;color:#0848a4;font-weight:700">v49 기사 마감기능 DB 연결 · 빈칸 로그인 시 아래 안내문구가 떠야 정상입니다.</div><p class="muted">Supabase 계정으로 로그인하세요. 관리자: admin, 기사: driver1 / driver2</p><input id="loginId" placeholder="이메일 또는 admin" autocomplete="username"><br><br><input id="loginPw" type="password" placeholder="비밀번호" autocomplete="current-password"><br><br><button type="button" id="nepLoginButton" class="primary finalLoginBtn" onclick="return window.NEP_HARD_LOGIN ? window.NEP_HARD_LOGIN(event) : (document.getElementById('loginMsg').textContent='페이지 준비 중입니다. 2초 후 다시 눌러주세요.', false)">로그인</button><p id="loginMsg" class="muted"></p></section>
 <section id="appView" class="hidden">
 <div class="nepBrandHeader">
   <div class="nepBrandHeaderTop">
@@ -5656,6 +5656,58 @@ function savePickup(cid, st){
   renderDriver();
 }
 
+// v49: 기사 마감 기능(주유/공장중량/수거수정)을 Supabase에 직접 저장합니다.
+const NEP_DRIVER_CLOSE_DIRECT_MODE = true;
+function newAppKey(prefix){
+  const r=(window.crypto&&crypto.randomUUID)?crypto.randomUUID():Math.random().toString(36).slice(2)+Date.now();
+  return `${prefix}__${r}`;
+}
+async function currentDriverUuid(){
+  const map=await getSupabaseDriverUuidMap();
+  const id=map[me?.id];
+  if(!id) throw new Error(`${me?.id||'기사'} DB 연결이 없습니다. drivers.app_driver_id를 확인해주세요.`);
+  return id;
+}
+async function syncFuelLogToSupabase(log){
+  if(!NEP_SUPABASE_MODE||!nepSupa||!me||!NEP_DRIVER_CLOSE_DIRECT_MODE) return;
+  const driverUuid=await currentDriverUuid();
+  log.appKey=log.appKey||newAppKey('fuel');
+  const payload={
+    app_fuel_key:log.appKey, fuel_date:log.date||today, driver_id:driverUuid, app_driver_id:String(log.driverId||me.id),
+    station:log.station||'', liters:Number(log.amountLiter||0), cost:Number(log.cost||0), memo:log.memo||null,
+    logged_at:`${log.date||today}T${log.time||'00:00'}:00`, app_meta:{source:'nep_v49'}
+  };
+  const {error}=await nepSupa.from('fuel_logs').upsert(payload,{onConflict:'app_fuel_key'});
+  if(error) throw new Error('주유 DB 저장 실패: '+supabaseFriendlyError(error));
+}
+async function deleteFuelLogFromSupabase(log){
+  if(!NEP_SUPABASE_MODE||!nepSupa||!log?.appKey) return;
+  const {error}=await nepSupa.from('fuel_logs').delete().eq('app_fuel_key',log.appKey);
+  if(error) throw new Error('주유 DB 삭제 실패: '+supabaseFriendlyError(error));
+}
+async function syncFactoryWeightToSupabase(rec){
+  if(!NEP_SUPABASE_MODE||!nepSupa||!me||!NEP_DRIVER_CLOSE_DIRECT_MODE) return;
+  const driverUuid=await currentDriverUuid();
+  const payload={
+    app_weigh_key:`${rec.date||today}__${rec.driverId||me.id}`, weigh_date:rec.date||today,
+    driver_id:driverUuid, app_driver_id:String(rec.driverId||me.id), gross_kg:Number(rec.gross||0), tare_kg:Number(rec.tare||0),
+    net_kg:Number(rec.net||0), memo:rec.memo||null, weighed_at:`${rec.date||today}T${rec.time||'00:00'}:00`, app_meta:{source:'nep_v49'}
+  };
+  const {error}=await nepSupa.from('factory_weigh_logs').upsert(payload,{onConflict:'app_weigh_key'});
+  if(error) throw new Error('공장 중량 DB 저장 실패: '+supabaseFriendlyError(error));
+}
+async function deletePickupRecordFromSupabase(cid){
+  if(!NEP_SUPABASE_MODE||!nepSupa||!me) return;
+  const key=`${today}__${me.id}__${cid}`;
+  const {error}=await nepSupa.from('pickup_records').delete().eq('app_pickup_key',key);
+  if(error) throw new Error('수거기록 DB 삭제 실패: '+supabaseFriendlyError(error));
+  const linked=await findSupabaseRouteStopForPickup({date:today,driverId:me.id,customerId:cid});
+  if(linked.routeStopId){
+    const {error:stopErr}=await nepSupa.from('route_stops').update({status:'pending',driver_memo:null}).eq('id',linked.routeStopId);
+    if(stopErr) throw new Error('코스 상태 초기화 실패: '+supabaseFriendlyError(stopErr));
+  }
+}
+
 function renderDriverFuelScreen(){
   const logs = (db.fuelLogs||[]).map((x,i)=>({...x,_idx:i})).filter(x=>x.date===today && x.driverId===me.id);
 
@@ -5733,7 +5785,8 @@ function addFuelLog(){
 
   const now = new Date();
   db.fuelLogs = db.fuelLogs || [];
-  db.fuelLogs.push({
+  const rec={
+    appKey:newAppKey('fuel'),
     date: today,
     driverId: me.id,
     station,
@@ -5741,9 +5794,13 @@ function addFuelLog(){
     cost,
     memo,
     time: String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0')
-  });
+  };
+  db.fuelLogs.push(rec);
   syncFuelExpenseFromLogs(today.slice(0,7));
   save();
+  if(NEP_SUPABASE_MODE && NEP_DRIVER_CLOSE_DIRECT_MODE){
+    syncFuelLogToSupabase(rec).then(()=>alert('주유 정보가 DB에 저장되었습니다.')).catch(e=>alert(supabaseFriendlyError(e)));
+  }
   renderDriverFuelScreen();
 }
 function updateFuelLog(i){
@@ -5755,13 +5812,20 @@ function updateFuelLog(i){
   x.memo = document.getElementById('fuelMemoEdit'+i)?.value || '';
   syncFuelExpenseFromLogs(today.slice(0,7));
   save();
+  if(NEP_SUPABASE_MODE && NEP_DRIVER_CLOSE_DIRECT_MODE){
+    syncFuelLogToSupabase(x).then(()=>alert('주유 수정내용이 DB에 저장되었습니다.')).catch(e=>alert(supabaseFriendlyError(e)));
+  }
   renderDriverFuelScreen();
 }
 function deleteFuelLog(i){
   if(!confirm('주유 기록을 삭제할까요?')) return;
+  const old=db.fuelLogs?.[i];
   db.fuelLogs.splice(i,1);
   syncFuelExpenseFromLogs(today.slice(0,7));
   save();
+  if(NEP_SUPABASE_MODE && NEP_DRIVER_CLOSE_DIRECT_MODE){
+    deleteFuelLogFromSupabase(old).catch(e=>alert(supabaseFriendlyError(e)));
+  }
   renderDriverFuelScreen();
 }
 
@@ -5834,6 +5898,10 @@ function saveFactoryWeight(){
   };
   if(!rec.gross || !rec.tare || !rec.net) return alert('총중량, 공차중량, 실중량을 입력하세요.');
   if(idx>=0) db.factoryWeighLogs[idx]=rec; else db.factoryWeighLogs.push(rec);
+  save();
+  if(NEP_SUPABASE_MODE && NEP_DRIVER_CLOSE_DIRECT_MODE){
+    syncFactoryWeightToSupabase(rec).then(()=>alert('공장 중량이 DB에 저장되었습니다.')).catch(e=>alert(supabaseFriendlyError(e)));
+  }
 
   const s = getDriverState();
   s.mode='done';
@@ -5908,26 +5976,33 @@ function goToPickup(idx){
   closeDriverModal();
   renderDriver();
 }
-function updatePickupFromModal(cid){
+async function updatePickupFromModal(cid){
   const st = document.getElementById('editStatus'+cid)?.value || 'waiting';
-  if(st==='waiting'){
-    db.pickups = db.pickups.filter(x=>!(x.date===today && x.customerId===cid));
-  }else{
-    const idx = db.pickups.findIndex(x=>x.date===today && x.customerId===cid);
-    const now = new Date();
-    const rec = {
-      date: today,
-      driverId: me.id,
-      customerId: cid,
-      status: st,
-      liter: st==='done' ? (Number(document.getElementById('editLiter'+cid)?.value || 0) || 0) : 0,
-      memo: document.getElementById('editMemo'+cid)?.value || '',
-      time: String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0')
-    };
-    if(idx>=0) db.pickups[idx]=rec; else db.pickups.push(rec);
+  try{
+    if(st==='waiting'){
+      db.pickups = db.pickups.filter(x=>!(x.date===today && x.customerId===cid));
+      if(NEP_SUPABASE_MODE && NEP_PICKUPS_DIRECT_MODE) await deletePickupRecordFromSupabase(cid);
+    }else{
+      const idx = db.pickups.findIndex(x=>x.date===today && x.customerId===cid);
+      const now = new Date();
+      const rec = {
+        date: today,
+        driverId: me.id,
+        customerId: cid,
+        status: st,
+        liter: st==='done' ? (Number(document.getElementById('editLiter'+cid)?.value || 0) || 0) : 0,
+        memo: document.getElementById('editMemo'+cid)?.value || '',
+        time: String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0')
+      };
+      if(idx>=0) db.pickups[idx]=rec; else db.pickups.push(rec);
+      if(NEP_SUPABASE_MODE && NEP_PICKUPS_DIRECT_MODE) await syncPickupRecordToSupabase(rec);
+    }
+    save();
+    alert('수거 수정내용이 DB에 저장되었습니다.');
+    openPickupEditModal();
+  }catch(e){
+    alert('수거 수정 DB 저장 실패: '+supabaseFriendlyError(e));
   }
-  save();
-  openPickupEditModal();
 }
 
 function renderCustomer(){

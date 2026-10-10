@@ -1,4 +1,4 @@
-const CACHE_NAME = 'nep-korea-v48-2-no-cache';
+const CACHE_NAME = 'nep-korea-v49-no-cache';
 self.addEventListener('install', event => { self.skipWaiting(); });
 self.addEventListener('activate', event => {
   event.waitUntil((async()=>{
