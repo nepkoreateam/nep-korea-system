@@ -1,4 +1,4 @@
-<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NEP Korea 수거관리 v51 문자발송대기 DB연결</title>
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NEP Korea 수거관리 v51.1 문자대기 오류수정</title>
 <meta name="theme-color" content="#0f3f8c">
 
 <meta name="application-name" content="NEP 수거관리">
@@ -3357,7 +3357,7 @@ button.danger,
     <p>NEP Korea</p>
   </div>
 </div>
-<h2>로그인</h2><div style="margin:8px 0 12px;padding:10px;border:1px solid #c7dbff;background:#eef4ff;border-radius:10px;font-size:13px;color:#0848a4;font-weight:700">v51 문자 발송대기 DB 연결 · 월말 관리대장을 message_queue에 저장합니다.</div><p class="muted">Supabase 계정으로 로그인하세요. 관리자: admin, 기사: driver1 / driver2</p><input id="loginId" placeholder="이메일 또는 admin" autocomplete="username"><br><br><input id="loginPw" type="password" placeholder="비밀번호" autocomplete="current-password"><br><br><button type="button" id="nepLoginButton" class="primary finalLoginBtn" onclick="return window.NEP_HARD_LOGIN ? window.NEP_HARD_LOGIN(event) : (document.getElementById('loginMsg').textContent='페이지 준비 중입니다. 2초 후 다시 눌러주세요.', false)">로그인</button><p id="loginMsg" class="muted"></p></section>
+<h2>로그인</h2><div style="margin:8px 0 12px;padding:10px;border:1px solid #c7dbff;background:#eef4ff;border-radius:10px;font-size:13px;color:#0848a4;font-weight:700">v51.1 문자대기 오류수정 · message_queue 저장 오류 문구를 실제 원인으로 표시합니다.</div><p class="muted">Supabase 계정으로 로그인하세요. 관리자: admin, 기사: driver1 / driver2</p><input id="loginId" placeholder="이메일 또는 admin" autocomplete="username"><br><br><input id="loginPw" type="password" placeholder="비밀번호" autocomplete="current-password"><br><br><button type="button" id="nepLoginButton" class="primary finalLoginBtn" onclick="return window.NEP_HARD_LOGIN ? window.NEP_HARD_LOGIN(event) : (document.getElementById('loginMsg').textContent='페이지 준비 중입니다. 2초 후 다시 눌러주세요.', false)">로그인</button><p id="loginMsg" class="muted"></p></section>
 <section id="appView" class="hidden">
 <div class="nepBrandHeader">
   <div class="nepBrandHeaderTop">
@@ -3373,7 +3373,7 @@ button.danger,
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 const today='2026-07-23', month='2026-07';
-// v51: Supabase 실제 로그인 + AppState + 업체관리/오늘배정/수거기록/월말관리대장 + 문자 발송대기 DB 직접연결
+// v51.1: 문자 발송대기 저장 방식 수정 - upsert 대신 insert, 오류 원문 표시
 const NEP_SUPABASE_URL='https://crwevoclldrrmpcjurwy.supabase.co';
 const NEP_SUPABASE_PUBLISHABLE_KEY='sb_publishable_D0_5l44LvR-0fnfpHAuwjQ__u5v66aY';
 const NEP_APP_STATE_KEY='nep_main';
@@ -3420,7 +3420,7 @@ function supabaseFriendlyError(error){
   const msg=String(error?.message||error||'');
   if(msg.includes('Invalid login credentials')) return '이메일 또는 비밀번호가 맞지 않습니다.';
   if(msg.includes('Email not confirmed')) return '이메일 인증이 완료되지 않은 계정입니다. Supabase Users에서 Confirm 처리해주세요.';
-  if(msg.includes('message_queue') || msg.includes('app_message_key')) return 'v51 문자 발송대기 DB가 아직 준비되지 않았습니다. 08 SQL을 먼저 실행해주세요.';
+  if(msg.includes('message_queue') || msg.includes('app_message_key')) return '문자대기 DB 저장 오류: '+msg;
   if(msg.includes('app_pickup_key') || msg.includes('pickup_records')) return 'v48 기사앱 수거완료 DB 컬럼이 아직 없습니다. 05 SQL을 먼저 실행해주세요.';
   if(msg.includes('app_route_key') || msg.includes('app_driver_id') || msg.includes('route_stops')) return 'v47 오늘배정 DB 컬럼이 아직 없습니다. 04 SQL을 먼저 실행해주세요.';
   if(msg.includes('app_customer_id') || msg.includes('route_plans') || msg.includes('pickup_days_ko')) return 'v46 업체관리 DB 컬럼이 아직 없습니다. 03 SQL을 먼저 실행해주세요.';
@@ -4993,7 +4993,7 @@ function ledgerSmsText(r,m){
 }
 function ledgerMessageQueuePayload(r,m,customerUuid){
   return {
-    app_message_key:`monthly_ledger_sms:${m}:${r.cu.id}`,
+    app_message_key:`monthly_ledger_sms:${m}:${r.cu.id}:${Date.now()}:${Math.random().toString(36).slice(2,8)}`,
     customer_id:customerUuid,
     channel:'sms',
     recipient:String(r.cu.phone||'').trim(),
@@ -5004,7 +5004,7 @@ function ledgerMessageQueuePayload(r,m,customerUuid){
     attempts:0,
     requested_by:me?.profileId||null,
     requested_at:new Date().toISOString(),
-    app_meta:{source:'nep_v51',type:'monthly_ledger',month:m,app_customer_id:r.cu.id,customer_name:r.cu.name,total_liters:Number(r.totalL||0),total_amount:Number(r.totalA||0)}
+    app_meta:{source:'nep_v51_1',type:'monthly_ledger',month:m,app_customer_id:r.cu.id,customer_name:r.cu.name,total_liters:Number(r.totalL||0),total_amount:Number(r.totalA||0)}
   };
 }
 async function queueLedgerSmsToSupabase(cid){
@@ -5018,7 +5018,7 @@ async function queueLedgerSmsToSupabase(cid){
     const customerUuid=customerMap[r.cu.id];
     if(!customerUuid)return alert(`${r.cu.name} 업체 DB 연결이 없습니다. 업체DB 동기화를 먼저 해주세요.`);
     const payload=ledgerMessageQueuePayload(r,m,customerUuid);
-    const {error}=await nepSupa.from('message_queue').upsert(payload,{onConflict:'app_message_key'});
+    const {error}=await nepSupa.from('message_queue').insert(payload);
     if(error)throw error;
     upsertSendLogLocal(m,r,'queued','sms_queue');
     if(typeof addChangeLog==='function') addChangeLog({type:'sms_queue',customerId:r.cu.id,customerName:r.cu.name,detail:`${m} 관리대장 문자 발송대기 저장`,reason:'message_queue'});
@@ -5045,7 +5045,7 @@ async function queueAllLedgerSmsToSupabase(){
       payload.push(ledgerMessageQueuePayload(r,m,customerUuid));
     });
     if(!payload.length)return alert('업체 DB 연결이 없어 문자 발송대기를 저장하지 못했습니다. 업체DB 동기화를 먼저 해주세요.');
-    const {error}=await nepSupa.from('message_queue').upsert(payload,{onConflict:'app_message_key'});
+    const {error}=await nepSupa.from('message_queue').insert(payload);
     if(error)throw error;
     rows.forEach(r=>{ if(customerMap[r.cu.id]) upsertSendLogLocal(m,r,'queued','sms_queue_bulk'); });
     if(typeof addChangeLog==='function') addChangeLog({type:'sms_queue',detail:`${m} 관리대장 문자 ${payload.length}건 발송대기 저장`,reason:'bulk'});
@@ -5105,7 +5105,7 @@ function renderSendCenter(){
         <button class="ghost" onclick="copyAllLedgerMessages()">전체 문구 복사</button>
         <button class="ghost" onclick="markAllLedgerSent()">전체 발송완료 처리</button>
       </div>
-      <div class="excelDocHint">v51부터 문자 버튼은 실제 문자를 바로 보내지 않고 message_queue에 대기목록을 저장합니다. KT 연동 프로그램을 연결하기 전까지는 업로드 파일도 함께 사용할 수 있습니다.</div>
+      <div class="excelDocHint">v51.1부터 문자 버튼은 실제 문자를 바로 보내지 않고 message_queue에 대기목록을 저장합니다. KT 연동 프로그램을 연결하기 전까지는 업로드 파일도 함께 사용할 수 있습니다.</div>
     </div>
     <div class="card">
       <div class="sectionTitle searchTitle">
@@ -5155,7 +5155,7 @@ function renderLedger(){
         <button class="ghost" onclick="exportAdminMonthlyXls()">월간정산 엑셀</button>
       </div>
     </div>
-    <div class="excelDocHint" id="ledgerDbStatus">v51: 관리대장 저장 후 문자대기 버튼을 누르면 message_queue에 발송 대기목록이 저장됩니다.</div>
+    <div class="excelDocHint" id="ledgerDbStatus">v51.1: 관리대장 저장 후 문자대기 버튼을 누르면 message_queue에 발송 대기목록이 저장됩니다.</div>
   </div><div id="ledgerOut"></div>`;
   setTimeout(()=>refreshMonthlyLedgerFromSupabase(month,false),0);
 }
@@ -5346,7 +5346,7 @@ async function generateMonthlyLedgersToSupabase(){
       total_liters:Math.round(Number(r.totalL||0)), pickup_count:r.ps.length, missed_count:0,
       total_amount:Math.round(Number(r.totalA||0)), ledger_text:ledgerText(r,m),
       customer_visible:false, generated_at:new Date().toISOString(), generated_by:me.profileId||null,
-      app_meta:{source:'nep_v51',app_customer_id:r.cu.id,month:m}
+      app_meta:{source:'nep_v51_1',app_customer_id:r.cu.id,month:m}
     });
   });
   if(!payload.length)return alert('업체 DB 연결이 없어 관리대장을 저장하지 못했습니다. 업체DB 동기화를 먼저 해주세요.');
