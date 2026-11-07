@@ -3631,73 +3631,62 @@ async function syncAllRoutesForDateToSupabase(){
   await syncRoutesForDateToSupabase(d, null);
 }
 
-async function syncRoutesForDateToSupabase(d=today, onlyDriverIds=null){
-  if(!NEP_SUPABASE_MODE || !nepSupa || !me || me.role!=='admin' || !NEP_ROUTES_DIRECT_MODE){
-    return alert('관리자 로그인 후 사용할 수 있습니다.');
-  }
+// 자동 코스 저장: 완료/미수거 기록과 기존 route_stop ID를 보존합니다.
+async function syncRoutesForDateToSupabase(d=today, onlyDriverIds=null, quiet=false){
+  if(!NEP_SUPABASE_MODE || !nepSupa || !me || me.role!=='admin' || !NEP_ROUTES_DIRECT_MODE) return;
   const driverMap=await getSupabaseDriverUuidMap(true);
   const customerMap=await getSupabaseCustomerUuidMap(true);
-  const targetDrivers=(onlyDriverIds?activeDrivers().filter(dr=>onlyDriverIds.includes(dr.id)):activeDrivers());
+  const targetDrivers=onlyDriverIds?activeDrivers().filter(dr=>onlyDriverIds.includes(dr.id)):activeDrivers();
   const missing=[];
   let totalStops=0;
-
   for(const dr of targetDrivers){
     const driverUuid=driverMap[dr.id];
-    if(!driverUuid){ missing.push(`${dr.name} 기사 DB 연결 없음`); continue; }
-
-    const routeKey=`${d}__${dr.id}`;
-    const rows=(db.assignments||[])
-      .filter(a=>a.date===d && a.driverId===dr.id)
+    if(!driverUuid){missing.push(dr.name+' 기사 DB 연결 없음');continue;}
+    const routeKey=d+'__'+dr.id;
+    const rows=(db.assignments||[]).filter(a=>a.date===d&&a.driverId===dr.id)
       .sort((a,b)=>(Number(a.order)||9999)-(Number(b.order)||9999));
-
-    const routePayload={
-      app_route_key: routeKey,
-      route_date: d,
-      driver_id: driverUuid,
-      status: 'planned',
-      memo: `NEP v47 오늘배정 동기화 · ${dr.name} · ${rows.length}곳`
-    };
-
-    const {data:route,error:routeErr}=await nepSupa
-      .from('routes')
-      .upsert(routePayload,{onConflict:'app_route_key'})
-      .select('id')
-      .single();
-    if(routeErr) throw new Error('코스 DB 저장 실패: '+supabaseFriendlyError(routeErr));
-
-    const {error:delErr}=await nepSupa.from('route_stops').delete().eq('route_id',route.id);
-    if(delErr) throw new Error('기존 코스 순서 삭제 실패: '+supabaseFriendlyError(delErr));
-
-    const stopRows=[];
-    rows.forEach((a,i)=>{
-      const cu=c(a.customerId);
-      const customerUuid=customerMap[a.customerId];
-      if(!customerUuid){ missing.push(`${cu.name||a.customerId} 업체 DB 연결 없음`); return; }
-      stopRows.push({
-        route_id: route.id,
-        customer_id: customerUuid,
-        app_customer_id: String(a.customerId),
-        stop_order: Number(a.order)||i+1,
-        planned_liters: Number(cu.includedLiter||0),
-        status: 'pending',
-        admin_memo: cu.memo||null,
-        app_meta: {source:'nep_v47', app_driver_id:dr.id, app_customer_id:String(a.customerId)}
-      });
-    });
-
-    if(stopRows.length){
-      const {error:stopErr}=await nepSupa.from('route_stops').insert(stopRows);
-      if(stopErr) throw new Error('코스 순서 DB 저장 실패: '+supabaseFriendlyError(stopErr));
-      totalStops+=stopRows.length;
+    const {data:route,error:routeErr}=await nepSupa.from('routes')
+      .upsert({app_route_key:routeKey,route_date:d,driver_id:driverUuid,status:'planned',memo:'NEP 자동 코스 저장 · '+dr.name},
+        {onConflict:'app_route_key'}).select('id').single();
+    if(routeErr)throw new Error('코스 DB 저장 실패: '+supabaseFriendlyError(routeErr));
+    const {data:existing,error:existingErr}=await nepSupa.from('route_stops')
+      .select('id,app_customer_id,status').eq('route_id',route.id);
+    if(existingErr)throw new Error('기존 코스 확인 실패: '+supabaseFriendlyError(existingErr));
+    const byCustomer=new Map((existing||[]).filter(x=>x.app_customer_id).map(x=>[String(x.app_customer_id),x]));
+    const keep=new Set();
+    for(let i=0;i<rows.length;i++){
+      const a=rows[i],cu=c(a.customerId),customerUuid=customerMap[a.customerId];
+      if(!customerUuid){missing.push((cu.name||a.customerId)+' 업체 DB 연결 없음');continue;}
+      const cid=String(a.customerId),old=byCustomer.get(cid);
+      keep.add(cid);
+      const payload={stop_order:Number(a.order)||i+1,planned_liters:Number(cu.includedLiter||0),
+        admin_memo:cu.memo||null};
+      if(old){
+        const {error}=await nepSupa.from('route_stops').update(payload).eq('id',old.id);
+        if(error)throw new Error('코스 순서 수정 실패: '+supabaseFriendlyError(error));
+      }else{
+        const {error}=await nepSupa.from('route_stops').insert({
+          route_id:route.id,customer_id:customerUuid,app_customer_id:cid,
+          ...payload,status:'pending',
+          app_meta:{source:'nep_auto_route',app_driver_id:dr.id,app_customer_id:cid}
+        });
+        if(error)throw new Error('새 코스 저장 실패: '+supabaseFriendlyError(error));
+      }
+      totalStops++;
+    }
+    // 수거가 진행된 정류장과 수거기록이 연결된 정류장은 자동으로 삭제하지 않습니다.
+    for(const old of (existing||[])){
+      if(keep.has(String(old.app_customer_id||'')) || !['pending','planned'].includes(String(old.status||'')))continue;
+      const {count,error:countErr}=await nepSupa.from('pickup_records').select('id',{count:'exact',head:true}).eq('route_stop_id',old.id);
+      if(countErr)throw new Error('수거기록 확인 실패: '+supabaseFriendlyError(countErr));
+      if(count)continue;
+      const {error}=await nepSupa.from('route_stops').delete().eq('id',old.id);
+      if(error)throw new Error('기존 코스 정리 실패: '+supabaseFriendlyError(error));
     }
   }
-
-  await saveSupabaseAppState(true);
-  if(missing.length){
-    alert(`코스DB 동기화 완료: ${totalStops}곳 저장\n\n확인 필요:\n- ${missing.slice(0,8).join('\n- ')}${missing.length>8?'\n- ...':''}`);
-  }else{
-    alert(`코스DB 동기화 완료: ${d} 기준 ${totalStops}곳 저장`);
-  }
+  if(missing.length)throw new Error('코스 자동저장 일부 누락: '+missing.slice(0,5).join(', '));
+  if(!quiet)alert(d+' 코스DB '+totalStops+'곳 저장 완료');
+  return totalStops;
 }
 
 async function loadRoutesForDateFromSupabase(d=routeDateVal()){
@@ -3858,6 +3847,7 @@ async function loadSession(){
 
 function save(){
   localStorage.setItem('nep_v16_account_work_simple', JSON.stringify(db));
+  if(NEP_SUPABASE_MODE && me?.role==='admin') nepScheduleAutoRouteSync();
   if(NEP_SUPABASE_MODE && me){
     clearTimeout(nepSaveTimer);
     nepSaveTimer=setTimeout(()=>{
@@ -4282,7 +4272,7 @@ function autoRefreshTodayAssignments(quiet=true){
 }
 function syncRoutePlansForDriver(did,d){let dk=dayKo(d); db.assignments.filter(a=>a.date===d&&a.driverId===did).forEach(a=>{let cu=c(a.customerId); if(cu.id){cu.routePlans=cu.routePlans||{}; cu.routePlans[dk]={driverId:did,order:a.order}}})}
 function clearRoutePlanIfMatch(cid,did,d){let cu=c(cid), dk=dayKo(d); if(cu.routePlans&&cu.routePlans[dk]&&cu.routePlans[dk].driverId===did) delete cu.routePlans[dk]}
-function renderAssign(){let drivers=activeDrivers(); assign.innerHTML=`<div class="card"><h3>정기 코스 배정</h3><p class="muted">업체관리의 수거요일·담당기사·방문순번을 기준으로 오늘배정이 자동 생성됩니다. 이 화면에서는 오늘만 예외로 순서 변경, 업체 추가·삭제가 가능합니다.</p><div class="grid"><input id="routeDate" type="date" value="${today}" onchange="ensureRouteThenDraw()"><select id="routeDriver" onchange="ensureRouteThenDraw()">${drivers.map(d=>`<option value="${d.id}">${d.name}</option>`).join('')}</select><input id="routeSearch" placeholder="추가할 업체 검색" oninput="drawRouteSearch()"><select id="routeCustomer"></select><input id="assignOrder" type="number" min="1" placeholder="넣을 순서 번호 예: 3"><button class="primary" onclick="addRouteEasy()">선택 업체 넣기</button><button class="green" onclick="rebuildAssignmentsForDateFromRules(routeDateVal(),false); save(); drawRouteSearch(); drawRouteBoard(); renderDash()">업체관리 기준 자동생성</button><button class="smallbtn primary" onclick="syncCurrentRouteToSupabase()">코스DB 동기화</button><button class="smallbtn" onclick="loadRoutesForDateFromSupabase()">코스DB 불러오기</button><button class="smallbtn" onclick="syncTodayPickupsToSupabase()">수거기록DB 동기화</button></div><div id="routeHint" class="muted" style="margin-top:10px">v48: 오늘배정은 routes / route_stops에, 기사앱 수거완료는 pickup_records에 저장됩니다.</div></div><div id="routeBoard"></div>`; ensureRouteThenDraw()} 
+function renderAssign(){let drivers=activeDrivers(); assign.innerHTML=`<div class="card"><h3>정기 코스 배정</h3><p class="muted">업체관리의 수거요일·담당기사·방문순번을 기준으로 오늘배정이 자동 생성됩니다. 이 화면에서는 오늘만 예외로 순서 변경, 업체 추가·삭제가 가능합니다.</p><div class="grid"><input id="routeDate" type="date" value="${today}" onchange="ensureRouteThenDraw()"><select id="routeDriver" onchange="ensureRouteThenDraw()">${drivers.map(d=>`<option value="${d.id}">${d.name}</option>`).join('')}</select><input id="routeSearch" placeholder="추가할 업체 검색" oninput="drawRouteSearch()"><select id="routeCustomer"></select><input id="assignOrder" type="number" min="1" placeholder="넣을 순서 번호 예: 3"><button class="primary" onclick="addRouteEasy()">업체 추가</button></div><div id="routeHint" class="muted" style="margin-top:10px">업체관리 기준 자동 배정 · 코스 변경 및 수거 기록 자동 저장 <span id="nepAutoSyncState" aria-live="polite"></span></div></div><div id="routeBoard"></div>`; ensureRouteThenDraw()} 
 function updateAutoPreview(){let d=document.getElementById('autoDate')?.value||today, html=`${d} (${dayKo(d)}) 자동 배정 예상: `; let parts=activeDrivers().map(dr=>`${dr.name} ${activeCustomersForDay(dr.id,d).length}곳`); let el=document.getElementById('autoPreview'); if(el) el.innerHTML=html+parts.join(' · ')}
 function ensureRouteThenDraw(){let did=document.getElementById('routeDriver')?.value, d=routeDateVal(); if(did&&d&&!db.assignments.some(a=>a.date===d&&a.driverId===did)){buildRouteForDriver(did,d,false);save()} drawRouteSearch(); drawRouteBoard()}
 function rebuildRouteFromWeekday(){let did=routeDriver.value,d=routeDateVal(); if(!confirm(`${d} ${dayKo(d)}요일 기준으로 ${u(did).name} 코스를 다시 정리할까요? 기존 순서 변경은 초기화됩니다.`))return; buildRouteForDriver(did,d,false);save();drawRouteSearch();drawRouteBoard();renderDash()}
@@ -8268,6 +8258,36 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   setTimeout(bind,300);
   setTimeout(bind,1200);
 })();
+
+/* NEP: 클릭 없이 코스DB 자동 저장 (데이터 손실 방지형) */
+let nepAutoRouteSignature='',nepAutoRouteTimer=null,nepAutoRouteWorking=false,nepAutoRouteRetry=null;
+function nepAutoRouteMessage(message,failed=false){
+  const el=document.getElementById('nepAutoSyncState');
+  if(el){el.textContent=' · '+message;el.style.color=failed?'#b42318':'#027a48';}
+  if(failed)console.warn('NEP 코스 자동저장:',message);
+}
+function nepScheduleAutoRouteSync(){
+  if(!NEP_SUPABASE_MODE||!nepSupa||!me||me.role!=='admin')return;
+  const d=(document.getElementById('routeDate')?.value)||today;
+  const rows=(db.assignments||[]).filter(x=>x.date===d)
+    .map(x=>[x.driverId,x.customerId,Number(x.order)||0]).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  const signature=JSON.stringify({date:d,rows});
+  if(signature===nepAutoRouteSignature)return;
+  nepAutoRouteSignature=signature;
+  clearTimeout(nepAutoRouteTimer);
+  nepAutoRouteMessage('코스 변경사항 저장 중');
+  nepAutoRouteTimer=setTimeout(async()=>{
+    if(nepAutoRouteWorking){nepAutoRouteSignature='';nepScheduleAutoRouteSync();return;}
+    nepAutoRouteWorking=true;
+    try{
+      await syncRoutesForDateToSupabase(d,null,true);
+      nepAutoRouteMessage('코스 자동저장 완료');
+    }catch(e){
+      nepAutoRouteSignature='';
+      nepAutoRouteMessage('코스 저장 실패 · '+supabaseFriendlyError(e),true);
+    }finally{nepAutoRouteWorking=false;}
+  },1200);
+}
 </script>
 
 </body></html>
