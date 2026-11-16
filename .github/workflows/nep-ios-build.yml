@@ -1,0 +1,26 @@
+name: NEP KOREA iOS simulator build
+on:
+  push:
+    branches: [nep-mobile-v1]
+    paths:
+      - 'mobile/ios/**'
+      - '.github/workflows/nep-ios-build.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  simulator:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Prepare app icon
+        run: bash mobile/ios/prepare.sh
+      - name: Compile iOS app without device signing
+        run: |
+          xcodebuild -project mobile/ios/NEPKorea.xcodeproj -scheme NEPKorea -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath mobile/ios/build CODE_SIGNING_ALLOWED=NO build
+      - name: Verify simulator app
+        run: |
+          test -f mobile/ios/build/Build/Products/Debug-iphonesimulator/NEPKorea.app/NEPKorea
+          /usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' mobile/ios/build/Build/Products/Debug-iphonesimulator/NEPKorea.app/Info.plist
+          file mobile/ios/build/Build/Products/Debug-iphonesimulator/NEPKorea.app/NEPKorea
