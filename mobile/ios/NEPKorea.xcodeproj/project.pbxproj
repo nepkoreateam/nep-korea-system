@@ -1,0 +1,29 @@
+// !$*UTF8*$!
+{
+ archiveVersion = 1;
+ classes = {};
+ objectVersion = 56;
+ objects = {
+  100000000000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NEPApp.swift; sourceTree = "<group>"; };
+  100000000000000000000002 = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+  100000000000000000000003 = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+  100000000000000000000004 = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NEPKorea.app; sourceTree = BUILT_PRODUCTS_DIR; };
+  100000000000000000000005 = {isa = PBXBuildFile; fileRef = 100000000000000000000001; };
+  100000000000000000000006 = {isa = PBXBuildFile; fileRef = 100000000000000000000003; };
+  100000000000000000000007 = {isa = PBXGroup; children = (100000000000000000000008,100000000000000000000009,); sourceTree = "<group>"; };
+  100000000000000000000008 = {isa = PBXGroup; children = (100000000000000000000001,100000000000000000000002,100000000000000000000003,); path = NEPKorea; sourceTree = "<group>"; };
+  100000000000000000000009 = {isa = PBXGroup; children = (100000000000000000000004,); name = Products; sourceTree = "<group>"; };
+  100000000000000000000010 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000005,); runOnlyForDeploymentPostprocessing = 0; };
+  100000000000000000000011 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+  100000000000000000000012 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000006,); runOnlyForDeploymentPostprocessing = 0; };
+  100000000000000000000013 = {isa = PBXNativeTarget; buildConfigurationList = 100000000000000000000017; buildPhases = (100000000000000000000010,100000000000000000000011,100000000000000000000012,); buildRules = (); dependencies = (); name = NEPKorea; productName = NEPKorea; productReference = 100000000000000000000004; productType = "com.apple.product-type.application"; };
+  100000000000000000000014 = {isa = PBXProject; attributes = {LastSwiftUpdateCheck = 1600; LastUpgradeCheck = 1600; TargetAttributes = {100000000000000000000013 = {CreatedOnToolsVersion = 16.0; }; }; }; buildConfigurationList = 100000000000000000000016; compatibilityVersion = "Xcode 14.0"; developmentRegion = ko; hasScannedForEncodings = 0; knownRegions = (ko,en,Base,); mainGroup = 100000000000000000000007; productRefGroup = 100000000000000000000009; projectDirPath = ""; projectRoot = ""; targets = (100000000000000000000013,); };
+  100000000000000000000016 = {isa = XCConfigurationList; buildConfigurations = (100000000000000000000018,100000000000000000000019,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+  100000000000000000000017 = {isa = XCConfigurationList; buildConfigurations = (100000000000000000000020,100000000000000000000021,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+  100000000000000000000018 = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_MODULES = YES; IPHONEOS_DEPLOYMENT_TARGET = 16.0; SDKROOT = iphoneos; SWIFT_VERSION = 5.0; }; name = Debug; };
+  100000000000000000000019 = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_MODULES = YES; IPHONEOS_DEPLOYMENT_TARGET = 16.0; SDKROOT = iphoneos; SWIFT_VERSION = 5.0; }; name = Release; };
+  100000000000000000000020 = {isa = XCBuildConfiguration; buildSettings = {ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = NEPKorea/Info.plist; LD_RUNPATH_SEARCH_PATHS = ("$(inherited)","@executable_path/Frameworks",); MARKETING_VERSION = 1.0.0; PRODUCT_BUNDLE_IDENTIFIER = kr.co.nepkorea.mobile; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2"; }; name = Debug; };
+  100000000000000000000021 = {isa = XCBuildConfiguration; buildSettings = {ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = NEPKorea/Info.plist; LD_RUNPATH_SEARCH_PATHS = ("$(inherited)","@executable_path/Frameworks",); MARKETING_VERSION = 1.0.0; PRODUCT_BUNDLE_IDENTIFIER = kr.co.nepkorea.mobile; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_COMPILATION_MODE = wholemodule; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2"; }; name = Release; };
+ };
+ rootObject = 100000000000000000000014;
+}
