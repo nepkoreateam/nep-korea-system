@@ -1,0 +1,45 @@
+name: NEP KOREA Android APK
+on:
+  push:
+    branches: [nep-mobile-v1]
+    paths:
+      - 'mobile/android/**'
+      - '.github/workflows/nep-mobile-build.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Prepare Android SDK
+        shell: bash
+        run: |
+          SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          export ANDROID_SDK_ROOT="$SDK"
+          if [[ ! -f "$SDK/platforms/android-35/android.jar" || ! -x "$SDK/build-tools/35.0.0/aapt2" ]]; then
+            "$SDK/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-35" "build-tools;35.0.0"
+          fi
+          java -version
+      - name: Compile sign and verify Android app
+        run: bash mobile/android/build.sh
+      - name: Upload installable pilot APK
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: NEP-KOREA-Android-v1-Pilot
+          path: |
+            mobile/android/build/dist/NEP-KOREA.apk
+            mobile/android/build/dist/SHA256SUMS.txt
+          retention-days: 30
+          if-no-files-found: error
+      - name: Upload unsigned package for secure release signing
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: NEP-KOREA-Android-v1-SigningInput
+          path: |
+            mobile/android/build/dist/NEP-KOREA-unsigned.apk
+            mobile/android/build/dist/apksigner.jar
+          retention-days: 7
+          if-no-files-found: error
