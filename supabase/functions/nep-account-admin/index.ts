@@ -39,14 +39,14 @@ Deno.serve(async(req:Request)=>{
       const {data:drivers,error:driverError}=await admin.from("drivers").select("id,app_driver_id,name,active").order("app_driver_id");
       if(driverError)throw driverError;
       const byId=new Map((drivers||[]).map(d=>[d.id,d]));
-      return (profiles||[]).filter(p=>p.linked_driver_id&&byId.has(p.linked_driver_id)&&p.auth_user_id!==user.id).map(p=>({profile_id:p.id,login_id:byId.get(p.linked_driver_id)?.app_driver_id||p.email,name:p.name,email:p.email,active:p.active,driver_active:byId.get(p.linked_driver_id)?.active}));
+      return (profiles||[]).filter(p=>p.linked_driver_id&&byId.has(p.linked_driver_id)&&p.auth_user_id!==user.id).map(p=>({profile_id:p.id,driver_key:byId.get(p.linked_driver_id)?.app_driver_id,login_id:(p.email||"").endsWith("@nepkorea.local")?p.email.split("@")[0]:p.email,name:p.name,email:p.email,active:p.active,driver_active:byId.get(p.linked_driver_id)?.active}));
     }
     if(action==="list"){
       const accounts=await accountList();
-      const {data:history,error:historyError}=await admin.from("audit_logs").select("action,record_id,after_data,created_at").in("action",["nep.driver.password_reset","nep.driver.login_status","nep.driver.account_create"]).order("created_at",{ascending:false}).limit(20);
+      const {data:history,error:historyError}=await admin.from("audit_logs").select("action,record_id,after_data,created_at").in("action",["nep.driver.password_reset","nep.driver.login_status","nep.driver.account_create","nep.driver.account_edit"]).order("created_at",{ascending:false}).limit(20);
       return reply(200,{accounts,history:historyError?[]:history||[],history_available:!historyError});
     }
-    if(!["reset","status","create"].includes(action))return reply(400,{error:"지원하지 않는 작업입니다."});
+    if(!["reset","status","create","edit"].includes(action))return reply(400,{error:"지원하지 않는 작업입니다."});
     // Step-up authentication: the signed-in administrator must re-enter their own password.
     if(typeof body.admin_password!=="string"||!body.admin_password||body.admin_password.length>256)return reply(400,{error:"현재 관리자 비밀번호를 입력해주세요."});
     const reauth=createClient(url,anon,opts);
@@ -105,6 +105,7 @@ Deno.serve(async(req:Request)=>{
     }
     const ids=Array.isArray(body.profile_ids)?[...new Set(body.profile_ids)]:[];
     if(!ids.length||ids.length>50||ids.some(x=>typeof x!=="string"||!uuid.test(x)))return reply(400,{error:"기사 계정을 1~50개 선택해주세요."});
+    if(action==="edit"&&ids.length!==1)return reply(400,{error:"한 기사 계정씩 수정해주세요."});
     if(action==="status"&&(ids.length!==1||typeof body.active!=="boolean"))return reply(400,{error:"로그인 상태는 한 계정씩 변경해주세요."});
     const {data:targets,error:targetError}=await admin.from("profiles").select("id,auth_user_id,role,active,linked_driver_id,name,email").in("id",ids).eq("role","driver").not("auth_user_id","is",null);
     if(targetError)throw targetError;
@@ -118,6 +119,37 @@ Deno.serve(async(req:Request)=>{
     if(linksError)throw linksError;
     if(targets.some(p=>(links||[]).filter(x=>x.linked_driver_id===p.linked_driver_id).length!==1))return reply(409,{error:"중복 연결된 기사 계정이 있습니다."});
     if(action==="reset"&&targets.some(p=>!p.active))return reply(409,{error:"로그인이 차단된 계정은 먼저 로그인 허용으로 변경해주세요."});
+    if(action==="edit"){
+      const target=targets[0],driver=byDriver.get(target.linked_driver_id);
+      const login=typeof body.login_id==="string"?body.login_id.trim().toLowerCase():"";
+      const name=typeof body.name==="string"?body.name.trim():"";
+      const pw=body.password;
+      if(!/^[a-z][a-z0-9._-]{2,31}$/.test(login)||["admin","administrator","root","nepkoreateam"].includes(login)||/^cust[0-9]+$/.test(login))return reply(400,{error:"아이디는 영문으로 시작하는 3~32자 영문·숫자·점·밑줄·하이픈으로 입력해주세요. 관리자/고객 예약 아이디는 사용할 수 없습니다."});
+      if(!name||name.length>80)return reply(400,{error:"이름을 80자 이내로 입력해주세요."});
+      if(pw!==undefined&&(!passwordOK(pw)||pw===body.admin_password))return reply(400,{error:"새 비밀번호는 관리자 비밀번호와 다르게, 영문·숫자·특수문자를 포함해 12자 이상으로 입력해주세요."});
+      const email=login+"@nepkorea.local";
+      const {data:current,error:readError}=await admin.auth.admin.getUserById(target.auth_user_id);
+      if(readError||!current?.user)return reply(409,{error:"실제 로그인 계정을 찾지 못했습니다."});
+      const oldEmail=current.user.email||"";
+      if(!oldEmail.endsWith("@nepkorea.local"))return reply(409,{error:"외부 이메일 계정은 Supabase에서 별도로 수정해주세요."});
+      const emailChanged=email!==oldEmail;
+      const {data:dupes,error:dupError}=await admin.from("profiles").select("id").ilike("email",email).neq("id",target.id).limit(1);
+      if(dupError)throw dupError;
+      if(dupes?.length)return reply(409,{error:"이미 사용 중인 아이디입니다."});
+      if(emailChanged||pw!==undefined){
+        const attrs:any={};
+        if(emailChanged){attrs.email=email;attrs.email_confirm=true;}
+        if(pw!==undefined)attrs.password=pw;
+        const {error}=await admin.auth.admin.updateUserById(target.auth_user_id,attrs);
+        if(error)return reply(409,{error:error.code==="email_exists"?"이미 사용 중인 아이디입니다.":safeFailure(error)});
+      }
+      // Keep immutable driver UUID and app_driver_id; all historical routes and pickups stay linked.
+      const {error:profileError}=await admin.from("profiles").update({email,name}).eq("id",target.id).eq("auth_user_id",target.auth_user_id).eq("role","driver");
+      const {error:driverNameError}=await admin.from("drivers").update({name}).eq("id",target.linked_driver_id);
+      const synced=!profileError&&!driverNameError;
+      const logged=await audit("nep.driver.account_edit",target.id,{login_id:login,previous_login_id:oldEmail.split("@")[0],driver_key:driver?.app_driver_id,name,password_changed:pw!==undefined,profile_synced:synced});
+      return reply(200,{results:[{ok:true,login_id:login,driver_key:driver?.app_driver_id,audit:logged,profile_synced:synced}],warning:synced?null:"로그인 정보는 변경됐지만 직원정보 동기화가 일부 실패했습니다. 같은 정보 수정 화면에서 다시 저장해주세요."});
+    }
     const results=[];
     for(const target of targets){
       const login=byDriver.get(target.linked_driver_id)?.app_driver_id||target.email||target.name;
