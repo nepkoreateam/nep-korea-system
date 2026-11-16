@@ -1,0 +1,10 @@
+android/build/
+ios/NEPKorea/Assets.xcassets/AppIcon.appiconset/AppIcon.png
+ios/build/
+*.jks
+*.keystore
+*.p12
+*.mobileprovision
+*.ipa
+*.xcuserstate
+xcuserdata/
