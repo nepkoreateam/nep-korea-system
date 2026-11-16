@@ -3362,7 +3362,8 @@ button.danger,
 .historyEmpty{text-align:center;padding:24px;border:1px dashed #cfd8e5;border-radius:14px;color:#667085;background:#fafcff}.historyAddGrid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.historyAddGrid .wide{grid-column:1/-1}.historyAddGrid label{display:block;font-size:12px;color:#667085;margin-bottom:5px;font-weight:800}
 @media(max-width:760px){.customerSimpleTop{grid-template-columns:1fr}.customerSimpleActions{justify-content:flex-start}.customerProfileGrid{grid-template-columns:repeat(2,minmax(0,1fr))}.customerQuickActions{grid-template-columns:repeat(2,minmax(0,1fr))}.historyItem{grid-template-columns:1fr}.historyAddGrid{grid-template-columns:1fr}.historyAddGrid .wide{grid-column:auto}}
 
-</style></head><body><header><h1>NEP Korea 수거관리 시스템</h1><div class="headsmall">Food Waste Collection Operations · Internal Management</div></header><main>
+</style><style id="nep-v65-login-cleanup">#loginView #mobileInstallHelp,#loginView #iphoneInstallHelp,#loginView #nepV29Notice,#loginView .nepSecurityNotice{display:none!important}</style>
+</head><body><header><h1>NEP Korea 수거관리 시스템</h1><div class="headsmall">Food Waste Collection Operations · Internal Management</div></header><main>
 <section id="loginView" class="login card">
 <div class="nepLoginBrand">
   <div class="nepLoginMark">NEP</div>
@@ -8092,12 +8093,7 @@ function renderCustomer(){
       return false;
     }
   };
-  window.nepShowMobileInstallHelp = function(){
-    const loginView=document.getElementById('loginView');
-    if(!loginView || document.getElementById('mobileInstallHelp')) return;
-    loginView.insertAdjacentHTML('beforeend', '<div id="mobileInstallHelp" class="mobileInstallHelp"><b>갤럭시 설치 안내</b><br>Chrome 메뉴에서 “설치 및 바로가기 만들기”를 누르면 홈화면 아이콘이 생성됩니다. 아이콘이 안 보이면 이 v27 파일을 GitHub에 다시 올린 뒤 기존 바로가기를 삭제하고 새로 설치하세요.</div>');
-  };
-  setTimeout(nepShowMobileInstallHelp, 200);
+  window.nepShowMobileInstallHelp = function(){}; // 운영 로그인 화면에서는 설치 및 구버전 안내를 표시하지 않습니다.
 })();
 
 
@@ -8105,25 +8101,13 @@ function renderCustomer(){
 (function(){
   window.nepIsIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   window.nepIsStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
-  window.nepShowIphoneInstallHelp=function(){
-    const loginView=document.getElementById('loginView');
-    if(!loginView || document.getElementById('iphoneInstallHelp')) return;
-    if(window.nepIsIOS && !window.nepIsStandalone){
-      loginView.insertAdjacentHTML('beforeend','<div id="iphoneInstallHelp" class="iphoneInstallHelp"><b>아이폰 설치 안내</b><br>Safari 하단 공유 버튼 → “홈 화면에 추가”를 누르면 NEP 수거관리 아이콘으로 설치됩니다. 이미 예전 아이콘이 있으면 삭제 후 다시 추가하세요.</div>');
-    }
-  };
-  setTimeout(nepShowIphoneInstallHelp, 250);
+  window.nepShowIphoneInstallHelp = function(){}; // 운영 로그인 화면에서는 설치 및 구버전 안내를 표시하지 않습니다.
 })();
 
 
 /* v29: 로고 캐시 갱신 안내 */
 (function(){
-  window.nepShowV29LogoNotice=function(){
-    const loginView=document.getElementById('loginView');
-    if(!loginView || document.getElementById('nepV29Notice')) return;
-    loginView.insertAdjacentHTML('beforeend', '<div id="nepV29Notice" class="nepLogoPreview"><img src="./icons/nep-v29-180.png" alt="NEP"><div><b>새 NEP 로고 적용판</b><br><span class="muted">기존 홈화면 아이콘은 삭제 후 다시 설치해야 새 로고가 보입니다.</span></div></div><div class="nepSecurityNotice"><b>보안 안내</b><br>GitHub Pages Public 저장소는 테스트용입니다. 실제 고객정보·전화번호·미수금·계약자료는 Public 저장소에 올리면 안 됩니다. 운영용은 Private 저장소 + 서버/DB 배포로 전환해야 합니다.</div>');
-  };
-  setTimeout(nepShowV29LogoNotice, 300);
+  window.nepShowV29LogoNotice = function(){}; // 운영 로그인 화면에서는 설치 및 구버전 안내를 표시하지 않습니다.
 })();
 
 
