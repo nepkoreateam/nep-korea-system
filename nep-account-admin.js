@@ -22,160 +22,124 @@ async function request(body){
   }finally{clearTimeout(timer);}
 }
 const validPassword=p=>typeof p==='string'&&p.length>=12&&new TextEncoder().encode(p).length<=72&&/[A-Za-z]/.test(p)&&/[0-9]/.test(p)&&/[^A-Za-z0-9\s]/.test(p);
-function updateLegacyButtons(){
-  document.querySelectorAll('#users .driverAccountCard button[onclick]').forEach(b=>{
-    const m=(b.getAttribute('onclick')||'').match(/^(toggleUser|deleteUser)\((\d+)\)$/);
-    if(!m)return;
-    const u=db.users[Number(m[2])];if(u?.role!=='driver')return;
-    if(m[1]==='deleteUser'){b.remove();return;}
-    b.removeAttribute('onclick');b.className='smallbtn ghost';b.textContent='로그인 관리';
-    b.addEventListener('click',()=>{selectedLogin=String(u.id);const card=el('nepActualAccounts');if(card){card.scrollIntoView({behavior:'smooth',block:'start'});card.nepFocusAccount?.(selectedLogin);}});
-  });
+
+// Login credentials are edited inside the original account info modal, never in the local app state.
+const oldEdit=window.openAccountEditModal,oldSave=window.saveAccountEdit;
+let editToken=0;
+const accountCache=new Map();
+async function loadAccounts(){const data=await request({action:'list'});accountCache.clear();for(const a of data.accounts||[])accountCache.set(String(a.driver_key||a.login_id),a);return data.accounts||[];}
+function input(labelText,id,type='text',value=''){
+ const w=make('div');const l=make('label','',labelText);l.htmlFor=id;const n=make('input');n.id=id;n.type=type;n.value=value;n.autocomplete=type==='password'?'new-password':'off';w.append(l,n);return [w,n];
 }
-function buildPanel(host){
-  const panel=make('section','card');panel.id='nepActualAccounts';
-  panel.innerHTML=`<div class="nepAcctHeader"><div><h3>기사 로그인 계정 관리</h3><div class="muted">실제 서버 계정 · 관리자 전용</div></div><button type="button" class="ghost smallbtn" data-nep="refresh">새로고침</button></div>
-  <div class="nepAcctHint">기사 계정의 비밀번호 변경, 신규 발급, 로그인 차단을 여기서 처리합니다. 급여·퇴사 이력과 수거코스는 기존 직원관리에서 별도로 관리하세요.</div>
-  <div class="nepAcctToolbar"><label class="nepAcctCheck"><input type="checkbox" data-nep="all"> 사용 중인 기사 전체 선택</label><button type="button" class="ghost smallbtn" data-nep="new">+ 신규 기사 계정</button></div>
-  <div data-nep="accounts" aria-live="polite" class="nepAcctRows">계정 목록을 확인하려면 새로고침을 누르세요.</div>
-  <form class="nepAcctForm" autocomplete="off" novalidate>
-    <h4 data-nep="formTitle">선택한 기사 비밀번호 재설정</h4>
-    <p class="muted" data-nep="target">선택한 기사에게 같은 새 비밀번호를 설정합니다.</p>
-    <div data-nep="newFields" hidden class="nepAcctFields"><label>기사 아이디<input data-nep="login" autocomplete="off" placeholder="예: driver3" maxlength="11"></label><label>기사 이름<input data-nep="name" autocomplete="off" maxlength="80" placeholder="이름"></label></div>
-    <div data-nep="passwordFields" class="nepAcctFields">
-      <label>새 비밀번호<input data-nep="pw" type="password" autocomplete="new-password" maxlength="72" placeholder="영문·숫자·특수문자 포함 12자 이상"></label>
-      <label>새 비밀번호 확인<input data-nep="pw2" type="password" autocomplete="new-password" maxlength="72" placeholder="다시 입력"></label>
-    </div>
-    <label class="nepAcctAdminPw">현재 관리자 비밀번호<input data-nep="adminPw" type="password" autocomplete="current-password" maxlength="256" placeholder="본인 확인용 · 서버에 저장하지 않음"></label>
-    <div class="nepAcctActions"><button type="submit" class="primary" data-nep="submit">비밀번호 재설정</button><button type="button" class="ghost" data-nep="cancel" hidden>취소</button></div>
-  </form>
-  <p data-nep="message" role="status" class="nepAcctMessage" aria-live="polite"></p>
-  <details class="nepAcctHistory"><summary>최근 계정관리 이력</summary><div data-nep="history" class="nepAcctRows">계정 목록을 조회하면 변경 이력이 표시됩니다.</div></details>
-  <p class="muted" style="font-size:12px;margin:10px 0 0">관리자·고객 계정 발급은 Supabase에서 별도 관리합니다. 관리자 비밀번호와 기사 비밀번호는 서로 다르게 설정해주세요.</p>`;
-  const old=el('uid')?.closest('.card');if(old&&host.contains(old))old.replaceWith(panel);else host.prepend(panel);
-  const q=k=>panel.querySelector('[data-nep="'+k+'"]');
-  let accounts=[],chosen=new Set(),mode='reset',target=null,busy=false,loaded=false;
-  const form=panel.querySelector('form');
-  function message(text,bad=false){if(!panel.isConnected)return;q('message').textContent=text||'';q('message').classList.toggle('nepAcctError',bad);}
-  function clearPasswords(){q('pw').value='';q('pw2').value='';q('adminPw').value='';}
-  function setBusy(on){busy=on;panel.querySelectorAll('button,input').forEach(n=>{n.disabled=on;});if(!on){panel.querySelectorAll('[data-inactive="1"]').forEach(n=>n.disabled=true);}}
-  function updateSelect(){
-    const active=accounts.filter(a=>a.active);
-    q('all').checked=active.length>0&&active.every(a=>chosen.has(a.profile_id));
-    q('all').indeterminate=active.some(a=>chosen.has(a.profile_id))&&!q('all').checked;
-    if(mode==='reset')q('target').textContent=chosen.size?chosen.size+'명 선택 · 동일한 새 비밀번호 설정':'먼저 비밀번호를 변경할 기사 계정을 선택하세요.';
-  }
-  function setMode(next,a=null,focus=false){
-    mode=next;target=a;clearPasswords();q('newFields').hidden=mode!=='create';q('passwordFields').hidden=mode==='status';q('cancel').hidden=mode==='reset';
-    q('formTitle').textContent=mode==='create'?'신규 기사 로그인 계정 발급':mode==='status'?(a?.active?'기사 로그인 차단':'기사 로그인 허용'):'선택한 기사 비밀번호 재설정';
-    q('submit').textContent=mode==='create'?'신규 계정 등록':mode==='status'?(a?.active?'로그인 차단':'로그인 허용'):'비밀번호 재설정';
-    if(mode==='create'){q('login').value='';q('name').value='';q('target').textContent='실제 기사 계정과 직원 DB 정보를 연결합니다.';}
-    else if(mode==='status')q('target').textContent=a.name+' ('+a.login_id+') · '+(a.active?'차단하면 업무 앱 접근이 제한됩니다. 기존 수거기록과 코스는 삭제하지 않습니다.':'로그인 접근을 다시 허용합니다.');
-    else updateSelect();
-    if(focus)form.scrollIntoView({behavior:'smooth',block:'nearest'});
-  }
-  function draw(){
-    const rows=q('accounts');rows.replaceChildren();
-    if(!accounts.length){rows.append(make('div','muted','실제 등록된 기사 로그인 계정이 없습니다.'));updateSelect();return;}
-    for(const a of accounts){
-      const row=make('div','nepAcctRow');
-      const input=make('input');input.type='checkbox';input.checked=chosen.has(a.profile_id);input.disabled=!a.active||busy;if(!a.active)input.dataset.inactive='1';input.setAttribute('aria-label',a.name+' 선택');
-      input.addEventListener('change',()=>{input.checked?chosen.add(a.profile_id):chosen.delete(a.profile_id);if(mode!=='reset')setMode('reset');updateSelect();});
-      const info=make('div','nepAcctInfo');info.append(make('b','',a.name),make('span','muted',a.login_id));
-      const status=make('span',a.active?'pill ok':'pill bad',a.active?'로그인 허용':'로그인 차단');
-      const action=make('button','smallbtn ghost',a.active?'차단':'허용');action.type='button';action.disabled=busy;action.addEventListener('click',()=>setMode('status',a,true));
-      row.append(input,info,status,action);rows.append(row);
-    }
-    updateSelect();
-  }
-  function drawHistory(history,available){
-    const box=q('history');box.replaceChildren();
-    if(!available){box.append(make('p','muted','변경 이력을 조회하지 못했습니다.'));return;}
-    if(!history?.length){box.append(make('p','muted','아직 기록된 계정관리 변경이 없습니다.'));return;}
-    const names={'nep.driver.password_reset':'비밀번호 변경','nep.driver.login_status':'로그인 상태 변경','nep.driver.account_create':'계정 발급'};
-    for(const h of history){const row=make('div','nepAcctLog');const details=h.after_data||{};row.append(make('b','',String(details.login_id||'기사')+' · '+(names[h.action]||'계정 변경')),make('span','muted',new Date(h.created_at).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'})+(typeof details.active==='boolean'?' · '+(details.active?'허용':'차단'):'')));box.append(row);}
-  }
-  function mergeNewDrivers(){
-    if(!Array.isArray(db.users))return false;
-    let changed=false;
-    for(const a of accounts){if(!db.users.some(u=>u.id===a.login_id)){db.users.push({id:a.login_id,name:a.name,role:'driver',active:a.driver_active!==false,monthlySalary:0,allowance:0,vehicleName:'',workStart:'',workEnd:'',workEvents:[],salaryHistory:[]});changed=true;}}
-    return changed;
-  }
-  async function refresh(keepMessage=false){
-    if(busy||!isAdmin()||!panel.isConnected)return;
-    setBusy(true);if(!keepMessage)message('실제 계정 조회 중…');
-    try{
-      const data=await request({action:'list'});if(!panel.isConnected||!isAdmin())return;
-      accounts=Array.isArray(data.accounts)?data.accounts:[];loaded=true;
-      chosen=new Set([...chosen].filter(id=>accounts.some(a=>a.profile_id===id&&a.active)));
-      if(selectedLogin){const a=accounts.find(x=>x.login_id===selectedLogin);selectedLogin='';if(a){if(a.active){chosen=new Set([a.profile_id]);setMode('reset');}else setMode('status',a);}}
-      draw();drawHistory(data.history,data.history_available);
-      if(mergeNewDrivers()){try{renderAssign();renderDash();}catch{}}
-      if(!keepMessage)message(flash||'실제 기사 계정 '+accounts.length+'명 조회 완료');
-      flash='';
-    }catch(e){message(e.message||'계정 조회 실패',true);}
-    finally{setBusy(false);if(panel.isConnected)draw();}
-  }
-  panel.nepRefresh=()=>refresh();
-  panel.nepFocusAccount=login=>{selectedLogin=login;if(!loaded){refresh();return;}const a=accounts.find(x=>x.login_id===login);if(a){selectedLogin='';if(a.active){chosen=new Set([a.profile_id]);setMode('reset',null,true);}else setMode('status',a,true);draw();}else refresh();};
-  q('refresh').addEventListener('click',()=>refresh());
-  q('all').addEventListener('change',()=>{chosen=new Set(q('all').checked?accounts.filter(a=>a.active).map(a=>a.profile_id):[]);setMode('reset');draw();});
-  q('new').addEventListener('click',()=>setMode('create',null,true));
-  q('cancel').addEventListener('click',()=>setMode('reset'));
-  form.addEventListener('submit',async e=>{
-    e.preventDefault();if(busy||!isAdmin())return;
-    let body={action:mode,admin_password:q('adminPw').value};
-    const secret=q('pw').value;
-    if(!body.admin_password){message('현재 관리자 비밀번호를 입력해주세요.',true);q('adminPw').focus();return;}
-    if(mode!=='status'){
-      if(!validPassword(secret)){message('새 비밀번호는 영문·숫자·특수문자를 포함해 12자 이상으로 입력해주세요.',true);return;}
-      if(secret!==q('pw2').value){message('새 비밀번호 확인이 일치하지 않습니다.',true);return;}
-      if(secret===body.admin_password){message('관리자 비밀번호와 다르게 설정해주세요.',true);return;}
-      body.password=secret;
-    }
-    let confirmation='';
-    if(mode==='reset'){
-      body.profile_ids=[...chosen];if(!body.profile_ids.length){message('기사 계정을 먼저 선택해주세요.',true);return;}
-      confirmation=accounts.filter(a=>chosen.has(a.profile_id)).map(a=>a.login_id).join(', ')+'의 실제 비밀번호를 변경할까요?';
-    }else if(mode==='create'){
-      body.login_id=q('login').value.trim().toLowerCase();body.name=q('name').value.trim();
-      if(!/^driver[1-9][0-9]{0,4}$/.test(body.login_id)||!body.name){message('driver3과 같은 아이디와 이름을 입력해주세요.',true);return;}
-      if(db.users.some(u=>u.id===body.login_id&&u.role!=='driver')){message('이미 다른 역할에서 사용 중인 아이디입니다.',true);return;}
-      confirmation=body.login_id+' 실제 기사 계정을 발급할까요?';
-    }else{
-      if(!target)return;body.profile_ids=[target.profile_id];body.active=!target.active;
-      confirmation=target.login_id+'의 로그인 '+(body.active?'허용':'차단')+'을 적용할까요? 기존 업무 기록은 유지됩니다.';
-    }
-    if(!confirm(confirmation))return;
-    const action=mode;clearPasswords();setBusy(true);message('인증 서버에 변경 요청 중…');
-    try{
-      const result=await request(body);const rows=Array.isArray(result.results)?result.results:[];
-      const good=rows.filter(x=>x.ok),bad=rows.filter(x=>!x.ok),auditFailed=good.filter(x=>x.audit===false);
-      if(!rows.length)throw Error('변경 결과를 확인하지 못했습니다. 목록을 새로고침해주세요.');
-      const summary='성공 '+good.length+'명'+(good.length?' ('+good.map(x=>x.login_id).join(', ')+')':'')+(bad.length?' · 실패 '+bad.map(x=>x.login_id+': '+(x.error||'확인 필요')).join(' / '):'')+(auditFailed.length?' · 일부 변경 이력 저장 실패':'');
-      message(summary,!!bad.length||!!auditFailed.length);
-      setMode('reset');chosen.clear();
-      if(action==='create'&&good.length){
-        flash=summary+' · 신규 기사 계정이 등록되었습니다.';
-        setBusy(false);window.renderUsers();return;
-      }
-      setBusy(false);await refresh(true);
-    }catch(e){message(e.message||'계정 변경 실패',true);}
-    finally{body.admin_password='';if(body.password)body.password='';clearPasswords();setBusy(false);}
-  });
-  if(flash)message(flash);
-  if(!host.classList.contains('hidden'))refresh();
-  updateLegacyButtons();
-  return panel;
+function showResult(node,message,bad=false){if(!node?.isConnected)return;node.textContent=message;node.style.color=bad?'#b42318':'#17643d';}
+function loginFor(x){return accountCache.get(String(x.id))?.login_id||x.id;}
+function refreshLabels(){
+ if(!isAdmin())return;
+ document.querySelectorAll('#users .driverAccountCard').forEach(card=>{
+  const b=card.querySelector('button[onclick^="openAccountEditModal("]');const m=(b?.getAttribute('onclick')||'').match(/\((\d+)\)/);const x=m?db.users[Number(m[1])]:null;if(x?.role!=='driver')return;
+  const a=accountCache.get(String(x.id));const meta=card.querySelector('.driverAccountMeta');
+  if(meta&&a)meta.textContent='아이디 '+a.login_id;
+  if(a){const status=card.querySelector('.nepLoginStatus');if(status)status.textContent=a.active?'로그인 허용':'로그인 차단';}
+ });
 }
 window.renderUsers=function(){
-  const result=oldRender.apply(this,arguments);
-  if(isAdmin()){const host=el('users');if(host)buildPanel(host);}
-  return result;
+ const result=oldRender.apply(this,arguments);if(!isAdmin())return result;
+ const host=el('users');if(!host)return result;
+ // The original account list remains the central screen. Keep account creation compact.
+ const add=el('uid')?.closest('.card');
+ if(add){
+  add.innerHTML='<div class="accountCleanTop"><h3>계정 추가</h3><span class="muted">신규 기사 로그인 계정</span></div><button class="primary" type="button" id="nepCreateDriver">+ 기사 계정 추가</button>';
+  el('nepCreateDriver').addEventListener('click',openCreate);
+ }
+ document.querySelectorAll('#users .driverAccountCard button[onclick]').forEach(b=>{
+  const m=(b.getAttribute('onclick')||'').match(/^(toggleUser|deleteUser)\((\d+)\)$/);if(!m)return;
+  const x=db.users[Number(m[2])];if(x?.role!=='driver')return;
+  if(m[1]==='deleteUser'){b.remove();return;}
+  b.removeAttribute('onclick');b.className='smallbtn ghost';b.textContent='로그인 상태';b.addEventListener('click',()=>openStatus(String(x.id)));
+  const card=b.closest('.driverAccountCard'),meta=card?.querySelector('.driverAccountMeta');
+  if(meta){const span=make('span','pill nepLoginStatus','로그인 상태 조회 전');span.style.marginLeft='6px';meta.parentElement?.append(span);}
+ });
+ refreshLabels();
+ if(!host.classList.contains('hidden'))loadAccounts().then(refreshLabels).catch(()=>{});
+ return result;
 };
-window.tab=function(id,btn){
-  const result=oldTab.apply(this,arguments);
-  if(id==='users'&&isAdmin()){const p=el('nepActualAccounts');if(p)p.nepRefresh?.();}
-  return result;
+window.tab=function(id,btn){const result=oldTab.apply(this,arguments);if(id==='users'&&isAdmin())loadAccounts().then(refreshLabels).catch(()=>{});return result;};
+window.openAccountEditModal=function(i){
+ if(!isAdmin()||db.users[i]?.role!=='driver')return oldEdit.apply(this,arguments);
+ const x=db.users[i],key=String(x.id),token=++editToken;
+ oldEdit.call(this,i);
+ const name=el('editName'+i),pw=el('editPw'+i),modal=el('accountModalInner'),grid=modal?.querySelector('.accountModalGrid');
+ if(!name||!pw||!grid)return;
+ const idInput=grid.querySelector('input[disabled]');
+ if(!idInput)return;
+ idInput.id='nepEditLogin'+i;idInput.value=loginFor(x);idInput.disabled=true;idInput.autocomplete='off';idInput.maxLength=32;
+ pw.disabled=true;pw.type='password';pw.value='';pw.autocomplete='new-password';pw.placeholder='변경할 때만 입력 (12자 이상)';pw.maxLength=72;
+ const p=modal.querySelector('.accountModalHead p');if(p)p.textContent='아이디와 비밀번호를 이곳에서 변경할 수 있습니다. 비밀번호를 비워두면 기존 비밀번호를 유지합니다.';
+ const [confirmWrap,confirmInput]=input('새 비밀번호 확인','nepEditConfirm'+i,'password');confirmInput.placeholder='새 비밀번호 다시 입력';confirmInput.maxLength=72;pw.parentElement.after(confirmWrap);
+ const [adminWrap,adminInput]=input('현재 관리자 비밀번호','nepEditAdmin'+i,'password');adminInput.autocomplete='current-password';adminInput.placeholder='로그인 정보 변경 시 본인 확인';adminWrap.className='wide';grid.append(adminWrap);
+ const msg=make('p','wide','실제 로그인 계정 확인 중…');msg.id='nepEditMessage'+i;msg.setAttribute('role','status');msg.style.margin='8px 0';grid.append(msg);
+ const saveBtn=modal.querySelector('button[onclick="saveAccountEdit('+i+')"]');
+ if(saveBtn)saveBtn.disabled=true;
+ loadAccounts().then(()=>{
+  if(token!==editToken||!idInput.isConnected||!isAdmin())return;
+  const a=accountCache.get(key);
+  if(!a){showResult(msg,'실제 로그인 계정이 연결되어 있지 않습니다.',true);return;}
+  idInput.value=a.login_id;idInput.disabled=false;pw.disabled=false;
+  idInput.dataset.profileId=a.profile_id;idInput.dataset.originalLogin=a.login_id;idInput.dataset.driverKey=key;
+  if(saveBtn)saveBtn.disabled=false;
+  showResult(msg,'로그인 아이디를 변경해도 기존 수거코스와 기록은 유지됩니다.');
+ }).catch(e=>showResult(msg,e.message||'계정 조회 실패',true));
 };
+window.saveAccountEdit=async function(i){
+ const x=db.users[i];if(x?.role!=='driver')return oldSave.apply(this,arguments);
+ if(!isAdmin())return;
+ const login=el('nepEditLogin'+i),pw=el('editPw'+i),pw2=el('nepEditConfirm'+i),adminPw=el('nepEditAdmin'+i),name=el('editName'+i),msg=el('nepEditMessage'+i);
+ if(!login||!login.dataset.profileId||login.dataset.driverKey!==String(x.id))return;
+ const modal=el('accountModalInner'),button=modal?.querySelector('button[onclick="saveAccountEdit('+i+')"]');
+ if(!button||button.disabled)return;
+ const nextLogin=login.value.trim().toLowerCase(),nextName=name?.value.trim(),secret=pw?.value||'',current=adminPw?.value||'';
+ if(!/^[a-z][a-z0-9._-]{2,31}$/.test(nextLogin)||['admin','administrator','root','nepkoreateam'].includes(nextLogin)||/^cust[0-9]+$/.test(nextLogin))return showResult(msg,'아이디는 영문 시작, 영문·숫자·점·밑줄·하이픈 3~32자로 입력하세요.',true);
+ if(!nextName||nextName.length>80)return showResult(msg,'이름을 80자 이내로 입력하세요.',true);
+ if(secret&&(!validPassword(secret)||secret!==pw2.value))return showResult(msg,'새 비밀번호는 영문·숫자·특수문자 포함 12자 이상이며 확인 값이 일치해야 합니다.',true);
+ if(!secret&&pw2.value)return showResult(msg,'새 비밀번호를 입력하세요.',true);
+ const account=accountCache.get(String(x.id));if(!account||account.profile_id!==login.dataset.profileId)return showResult(msg,'계정 정보를 다시 불러와주세요.',true);
+ const authChange=nextLogin!==login.dataset.originalLogin||!!secret||nextName!==account.name;
+ if(authChange&&!current)return showResult(msg,'현재 관리자 비밀번호를 입력해주세요.',true);
+ if(secret&&secret===current)return showResult(msg,'관리자 비밀번호와 다르게 설정해주세요.',true);
+ if(authChange&&!confirm(nextName+' 기사님의 실제 계정 정보를 변경할까요?'))return;
+ button.disabled=true;showResult(msg,'저장 중…');
+ let body=null;
+ try{
+  if(authChange){
+   body={action:'edit',profile_ids:[account.profile_id],login_id:nextLogin,name:nextName,admin_password:current};if(secret)body.password=secret;
+   const result=await request(body);const row=result.results?.[0];if(!row?.ok)throw Error('계정 변경 결과를 확인하지 못했습니다.');
+   account.login_id=row.login_id;account.name=nextName;login.dataset.originalLogin=row.login_id;
+   pw.value='';pw2.value='';adminPw.value='';
+   if(result.warning||row.profile_synced===false){showResult(msg,result.warning||'로그인 정보 변경 완료. 직원정보 동기화를 다시 시도해주세요.',true);return;}
+   if(row.audit===false)alert('로그인 정보는 변경되었지만 변경 이력 기록에 실패했습니다.');
+  }
+  if(!modal.isConnected||db.users[i]!==x)return;
+  // Preserve the stable employee key. Legacy save handles only operational fields, never credentials.
+  pw.value='';pw2.value='';adminPw.value='';await oldSave.call(this,i);
+ }catch(e){showResult(msg,e.message||'저장 실패',true);}
+ finally{if(body){body.admin_password='';if(body.password)body.password='';}pw.value='';pw2.value='';adminPw.value='';if(button.isConnected)button.disabled=false;}
+};
+function openCreate(){
+ if(!isAdmin())return;
+ showAccountModal('<div class="accountModalHead"><h3>기사 계정 추가</h3><button class="iconClose" onclick="closeAccountModal()">×</button></div><div class="accountModalBody"><div class="accountModalGrid" id="nepNewDriverFields"></div><p id="nepNewDriverMessage" role="status"></p></div><div class="accountModalFoot"><button class="smallbtn ghost" onclick="closeAccountModal()">닫기</button><button class="smallbtn green" id="nepNewDriverSave">등록</button></div>');
+ const g=el('nepNewDriverFields'),msg=el('nepNewDriverMessage'),b=el('nepNewDriverSave');
+ const [a,id]=input('아이디 (예: driver3)','nepNewDriverId');const [c,name]=input('이름','nepNewDriverName');const [d,pw]=input('새 비밀번호','nepNewDriverPw','password');const [e,pw2]=input('비밀번호 확인','nepNewDriverPw2','password');const [f,admin]=input('현재 관리자 비밀번호','nepNewDriverAdmin','password');f.className='wide';admin.autocomplete='current-password';g.append(a,c,d,e,f);
+ b.onclick=async()=>{if(b.disabled)return;const login=id.value.trim().toLowerCase();if(!/^driver[1-9][0-9]{0,4}$/.test(login)||!name.value.trim()||!validPassword(pw.value)||pw.value!==pw2.value||!admin.value)return showResult(msg,'아이디(driver3 형식), 이름, 비밀번호(12자 이상), 관리자 비밀번호를 확인하세요.',true);
+ if(!confirm(login+' 기사 계정을 등록할까요?'))return;b.disabled=true;const body={action:'create',login_id:login,name:name.value.trim(),password:pw.value,admin_password:admin.value};try{const r=await request(body);if(!r.results?.[0]?.ok)throw Error('등록 결과를 확인하지 못했습니다.');const list=await loadAccounts();const account=list.find(a=>a.login_id===login);if(account&&!db.users.some(u=>u.id===account.driver_key)){db.users.push({id:account.driver_key,name:account.name,role:'driver',active:true,monthlySalary:0,allowance:0,vehicleName:'',workStart:'',workEnd:'',workEvents:[],salaryHistory:[]});save();}closeAccountModal();renderAdmin();goAdminTab('users');}catch(err){showResult(msg,err.message||'등록 실패',true);}finally{body.password='';body.admin_password='';pw.value='';pw2.value='';admin.value='';b.disabled=false;}};
+}
+async function openStatus(key){
+ if(!isAdmin())return;
+ try{await loadAccounts();const a=accountCache.get(key);if(!a)throw Error('실제 로그인 계정이 없습니다.');
+ showAccountModal('<div class="accountModalHead"><h3>기사 로그인 상태</h3><button class="iconClose" onclick="closeAccountModal()">×</button></div><div class="accountModalBody"><p id="nepStatusText"></p><div class="accountModalGrid" id="nepStatusFields"></div><p id="nepStatusMessage" role="status"></p></div><div class="accountModalFoot"><button class="smallbtn ghost" onclick="closeAccountModal()">닫기</button><button class="smallbtn green" id="nepStatusSave"></button></div>');
+ el('nepStatusText').textContent=a.login_id+' · '+(a.active?'현재 로그인 허용 상태':'현재 로그인 차단 상태')+' / 기존 업무기록은 유지됩니다.';
+ const [w,pw]=input('현재 관리자 비밀번호','nepStatusAdmin','password');pw.autocomplete='current-password';w.className='wide';el('nepStatusFields').append(w);
+ const b=el('nepStatusSave'),msg=el('nepStatusMessage');b.textContent=a.active?'로그인 차단':'로그인 허용';
+ b.onclick=async()=>{if(!pw.value)return showResult(msg,'관리자 비밀번호를 입력하세요.',true);if(!confirm(a.login_id+'의 로그인 상태를 변경할까요?'))return;b.disabled=true;const body={action:'status',profile_ids:[a.profile_id],active:!a.active,admin_password:pw.value};try{const r=await request(body);if(!r.results?.[0]?.ok)throw Error('변경 결과를 확인하지 못했습니다.');await loadAccounts();closeAccountModal();refreshLabels();}catch(e){showResult(msg,e.message||'변경 실패',true);}finally{body.admin_password='';pw.value='';b.disabled=false;}};
+ }catch(e){alert(e.message||'계정 조회 실패');}
+}
 })();
